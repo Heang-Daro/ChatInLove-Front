@@ -1,10 +1,19 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-
+import 'package:love_in_chat/data/repositories/chat_repository.dart';
+import 'package:love_in_chat/model/Response/ConversationResponse.dart';
+import 'package:love_in_chat/model/emun/ConversationType.dart';
 import '../provider/AuthProvider.dart';
 import '../provider/ConversationProvider.dart';
 import '../service/NotificationService.dart';
+import '../util/AppBarStyle.dart';
+import 'ChatRequestScreen.dart';
+import 'ChatSearchDelegate.dart';
+import 'CreateGroupDialog.dart';
+import 'ProfileScreen.dart';
+import 'setting_util/SettingScreen.dart';
+import 'home_body/all.dart';
 
 class HomeScreen extends StatefulWidget {
   final Function(ThemeMode) onThemeChanged;
@@ -24,12 +33,20 @@ class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
   bool _notificationsEnabled = true;
 
+  late final List<Widget> _screens = [
+    const AllChat(),
+    const ChatRequestScreen(),
+    const ProfileScreen(),
+    const SettingScreen(),
+  ];
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      final conversationProvider = Provider.of<ConversationProvider>(context, listen: false);
+      final conversationProvider =
+          Provider.of<ConversationProvider>(context, listen: false);
 
       conversationProvider.onNewMessageNotification = (message) async {
         if (!_notificationsEnabled) return;
@@ -43,11 +60,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         );
 
-        final chatName = chat.name ?? 'New Message';
-
         await NotificationService.showNotification(
           id: message.conversationId.hashCode,
-          title: chatName,
+          title: chat.name ?? 'New Message',
           body: message.previewText,
           payload: message.conversationId,
         );
@@ -57,7 +72,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
       try {
         Provider.of<ChatRepository>(context, listen: false).startListening();
-      } catch (_) {}
+      } catch (_) {
+        // The repository is optional; the app can run without it.
+      }
 
       conversationProvider.fetchConversations(authProvider);
     });
@@ -69,68 +86,65 @@ class _HomeScreenState extends State<HomeScreen> {
     final granted = await NotificationService.requestPermission();
     if (!mounted) return;
 
-    if (granted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Browser notifications enabled.')),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Notifications were not enabled. Please allow them in your browser settings.')),
-      );
-    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          granted
+              ? 'Browser notifications enabled.'
+              : 'Notifications were not enabled. Allow them in browser settings.',
+        ),
+      ),
+    );
   }
 
   void _showNotificationSettings() {
     showDialog(
       context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: const Row(
-                children: [
-                  Icon(Icons.notifications_active, color: Colors.pinkAccent),
-                  SizedBox(width: 8),
-                  Text('Notification Mode'),
-                ],
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.notifications_active, color: Colors.pinkAccent),
+              SizedBox(width: 8),
+              Text('Notification Mode'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SwitchListTile(
+                title: const Text('Phone Notifications'),
+                subtitle:
+                    const Text('Show alerts when someone sends a message'),
+                value: _notificationsEnabled,
+                activeColor: Colors.pinkAccent,
+                onChanged: (value) {
+                  setDialogState(() => _notificationsEnabled = value);
+                  setState(() => _notificationsEnabled = value);
+                },
               ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SwitchListTile(
-                    title: const Text('Phone Notifications'),
-                    subtitle: const Text('Show alerts when someone sends a message'),
-                    value: _notificationsEnabled,
-                    activeColor: Colors.pinkAccent,
-                    onChanged: (bool value) {
-                      setDialogState(() => _notificationsEnabled = value);
-                      setState(() => _notificationsEnabled = value);
-                    },
+              if (kIsWeb)
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _enableWebNotifications,
+                    icon: const Icon(Icons.notifications_none),
+                    label: const Text('Enable browser notifications'),
                   ),
-                  if (kIsWeb)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: _enableWebNotifications,
-                          icon: const Icon(Icons.notifications_none),
-                          label: const Text('Enable browser notifications'),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Close', style: TextStyle(color: Colors.pinkAccent)),
                 ),
-              ],
-            );
-          },
-        );
-      },
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text(
+                'Close',
+                style: TextStyle(color: Colors.pinkAccent),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -172,12 +186,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   )
                 else if (_selectedIndex != 3)
                   IconButton(
-                    onPressed: () {
-                      showSearch(
-                        context: context,
-                        delegate: ChatSearchDelegate(),
-                      );
-                    },
+                    onPressed: () => showSearch(
+                      context: context,
+                      delegate: ChatSearchDelegate(),
+                    ),
                     icon: const Icon(Icons.search, color: Colors.white),
                   ),
                 const SizedBox(width: 4),
@@ -185,12 +197,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   icon: const Icon(Icons.more_vert, color: Colors.white),
                   onSelected: (value) {
                     if (value is ThemeMode) {
-                      onThemeChanged(value);
+                      widget.onThemeChanged(value);
                     } else if (value == 'notification_mode') {
                       _showNotificationSettings();
                     }
                   },
-                  itemBuilder: (BuildContext context) => [
+                  itemBuilder: (context) => [
                     const PopupMenuItem<ThemeMode>(
                       value: ThemeMode.light,
                       child: Row(
@@ -247,21 +259,20 @@ class _HomeScreenState extends State<HomeScreen> {
               icon: const Icon(Icons.group_add, color: Colors.white),
               label: const Text(
                 'New Group',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-              onPressed: () {
-                showDialog(
-                  context: context,
-                  builder: (context) => const CreateGroupDialog(),
-                );
-              },
+              onPressed: () => showDialog<void>(
+                context: context,
+                builder: (context) => const CreateGroupDialog(),
+              ),
             )
           : null,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
-        onDestinationSelected: (index) {
-          setState(() => _selectedIndex = index);
-        },
+        onDestinationSelected: (index) => setState(() => _selectedIndex = index),
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.wechat_outlined),
