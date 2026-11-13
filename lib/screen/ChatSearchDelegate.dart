@@ -11,9 +11,7 @@ class ChatSearchDelegate extends SearchDelegate<UserResponse?> {
   final Map<String, Future<List<UserResponse>>> _searches = {};
   bool _openingConversation = false;
 
-  ChatSearchDelegate() {
-    searchFieldLabel = 'Search people by username';
-  }
+  ChatSearchDelegate() : super(searchFieldLabel: 'Search people by username');
 
   @override
   ThemeData appBarTheme(BuildContext context) {
