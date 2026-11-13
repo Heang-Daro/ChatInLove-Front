@@ -1,6 +1,13 @@
 import 'package:flutter/foundation.dart';
 
-// Set your computer's local Wi-Fi IP address here when testing on a real physical device:
+/// Deployed Backend on Render
+const String BACKEND_BASE_URL = "https://chatinlove.onrender.com";
+const String BACKEND_WS_URL = "wss://chatinlove.onrender.com";
+
+/// Set to true to use the deployed Render backend (default), or false for local development:
+const bool USE_REMOTE_BACKEND = true;
+
+// Set your computer's local Wi-Fi IP address here when testing on a real physical device locally:
 const String SERVER_IP = "10.1.68.109";
 
 String get defaultHost {
@@ -14,8 +21,14 @@ final String HOST = defaultHost;
 const String PORT = "2026";
 const String PROTOCOL = "http";
 const String PROTOCOL_SOCKET = "ws";
-final String REST_URL = "$PROTOCOL://$HOST:$PORT";
-final String SOCKET_URL = "$PROTOCOL_SOCKET://$HOST:$PORT";
+
+final String REST_URL = USE_REMOTE_BACKEND
+    ? BACKEND_BASE_URL.replaceAll(RegExp(r'/+$'), '')
+    : "$PROTOCOL://$HOST:$PORT";
+
+final String SOCKET_URL = USE_REMOTE_BACKEND
+    ? BACKEND_WS_URL.replaceAll(RegExp(r'/+$'), '')
+    : "$PROTOCOL_SOCKET://$HOST:$PORT";
 
 /// Turns the content of a media/file message into a loadable URL.
 ///
