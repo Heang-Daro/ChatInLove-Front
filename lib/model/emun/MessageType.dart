@@ -1,0 +1,3 @@
+enum MessageType {
+  TEXT, IMAGE, SYSTEM, CALL,VOICE,VIDEO,FILE
+}

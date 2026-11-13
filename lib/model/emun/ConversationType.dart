@@ -1,0 +1,3 @@
+enum ConversationType {
+  PRIVATE, GROUP
+}
