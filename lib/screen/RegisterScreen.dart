@@ -171,13 +171,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
                     ),
                     const SizedBox(height: 22),
-                    Text(
+                    const Text(
                       'Create your account',
                       textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: -0.4,
-                          ),
+                      style: TextStyle(
+                        color: Colors.pinkAccent,
+                        fontSize: 28,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.5,
+                      ),
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -193,6 +195,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       textInputAction: TextInputAction.next,
                       autofillHints: const [AutofillHints.newUsername],
                       autocorrect: false,
+                      style: TextStyle(color: colors.onSurface),
                       decoration: _fieldDecoration(
                         label: 'Username',
                         hint: 'Choose a username',
@@ -207,6 +210,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       textInputAction: TextInputAction.next,
                       autofillHints: const [AutofillHints.email],
                       autocorrect: false,
+                      style: TextStyle(color: colors.onSurface),
                       decoration: _fieldDecoration(
                         label: 'Email',
                         hint: 'you@example.com',
@@ -222,6 +226,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       autofillHints: const [AutofillHints.newPassword],
                       enableSuggestions: false,
                       autocorrect: false,
+                      style: TextStyle(color: colors.onSurface),
                       decoration: _fieldDecoration(
                         label: 'Password',
                         hint: 'At least 8 characters',
@@ -246,6 +251,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       autofillHints: const [AutofillHints.newPassword],
                       enableSuggestions: false,
                       autocorrect: false,
+                      style: TextStyle(color: colors.onSurface),
                       onFieldSubmitted: (_) {
                         if (!authProvider.isLoading) _handleRegister();
                       },
