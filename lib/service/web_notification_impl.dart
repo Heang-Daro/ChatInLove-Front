@@ -31,7 +31,6 @@ void showWebNotification(String title, String body) {
       title,
       body: body,
       icon: '/icons/Icon-192.png',
-      badge: '/icons/Icon-192.png',
     );
   } catch (_) {
     // Ignore browser-specific incompatibilities.
