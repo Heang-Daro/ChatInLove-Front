@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:love_in_chat/data/repositories/chat_repository.dart';
@@ -10,7 +9,7 @@ import '../service/NotificationService.dart';
 import '../util/AppBarStyle.dart';
 import 'ChatRequestScreen.dart';
 import 'ChatSearchDelegate.dart';
-import 'CreateGroupDialog.dart';
+import 'CreateGroupScreen.dart';
 import 'ProfileScreen.dart';
 import 'setting_util/SettingScreen.dart';
 import 'home_body/all.dart';
@@ -44,13 +43,11 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      final conversationProvider =
-          Provider.of<ConversationProvider>(context, listen: false);
+      final authProvider = context.read<AuthProvider>();
+      final conversationProvider = context.read<ConversationProvider>();
 
       conversationProvider.onNewMessageNotification = (message) async {
         if (!_notificationsEnabled) return;
-
         final chat = conversationProvider.conversations.firstWhere(
           (c) => c.id == message.conversationId,
           orElse: () => ConversationResponse(
@@ -59,7 +56,6 @@ class _HomeScreenState extends State<HomeScreen> {
             members: const [],
           ),
         );
-
         await NotificationService.showNotification(
           id: message.conversationId.hashCode,
           title: chat.name ?? 'New Message',
@@ -69,30 +65,24 @@ class _HomeScreenState extends State<HomeScreen> {
       };
 
       conversationProvider.initSocket(authProvider);
-
       try {
-        Provider.of<ChatRepository>(context, listen: false).startListening();
+        context.read<ChatRepository>().startListening();
       } catch (_) {
         // The repository is optional; the app can run without it.
       }
-
       conversationProvider.fetchConversations(authProvider);
     });
   }
 
   Future<void> _enableWebNotifications() async {
     if (!kIsWeb) return;
-
     final granted = await NotificationService.requestPermission();
     if (!mounted) return;
-
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          granted
-              ? 'Browser notifications enabled.'
-              : 'Notifications were not enabled. Allow them in browser settings.',
-        ),
+        content: Text(granted
+            ? 'Browser notifications enabled.'
+            : 'Notifications were not enabled. Allow them in browser settings.'),
       ),
     );
   }
@@ -114,8 +104,7 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               SwitchListTile(
                 title: const Text('Phone Notifications'),
-                subtitle:
-                    const Text('Show alerts when someone sends a message'),
+                subtitle: const Text('Show alerts when someone sends a message'),
                 value: _notificationsEnabled,
                 activeColor: Colors.pinkAccent,
                 onChanged: (value) {
@@ -137,10 +126,7 @@ class _HomeScreenState extends State<HomeScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text(
-                'Close',
-                style: TextStyle(color: Colors.pinkAccent),
-              ),
+              child: const Text('Close', style: TextStyle(color: Colors.pinkAccent)),
             ),
           ],
         ),
@@ -177,74 +163,41 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: AppBarStyle.titleStyle,
               ),
             ),
-            Row(
-              children: [
-                if (_selectedIndex == 2)
-                  IconButton(
-                    onPressed: () {},
-                    icon: const Icon(Icons.edit, color: Colors.white),
-                  )
-                else if (_selectedIndex != 3)
-                  IconButton(
-                    onPressed: () => showSearch(
-                      context: context,
-                      delegate: ChatSearchDelegate(),
-                    ),
-                    icon: const Icon(Icons.search, color: Colors.white),
-                  ),
-                const SizedBox(width: 4),
-                PopupMenuButton<dynamic>(
-                  icon: const Icon(Icons.more_vert, color: Colors.white),
-                  onSelected: (value) {
-                    if (value is ThemeMode) {
-                      widget.onThemeChanged(value);
-                    } else if (value == 'notification_mode') {
-                      _showNotificationSettings();
-                    }
-                  },
-                  itemBuilder: (context) => [
-                    const PopupMenuItem<ThemeMode>(
-                      value: ThemeMode.light,
-                      child: Row(
-                        children: [
-                          Icon(Icons.light_mode, color: Colors.pinkAccent),
-                          SizedBox(width: 10),
-                          Text('Light Theme'),
-                        ],
-                      ),
-                    ),
-                    const PopupMenuItem<ThemeMode>(
-                      value: ThemeMode.dark,
-                      child: Row(
-                        children: [
-                          Icon(Icons.dark_mode, color: Colors.pinkAccent),
-                          SizedBox(width: 10),
-                          Text('Dark Theme'),
-                        ],
-                      ),
-                    ),
-                    const PopupMenuItem<ThemeMode>(
-                      value: ThemeMode.system,
-                      child: Row(
-                        children: [
-                          Icon(Icons.brightness_auto, color: Colors.pinkAccent),
-                          SizedBox(width: 10),
-                          Text('System Default'),
-                        ],
-                      ),
-                    ),
-                    const PopupMenuDivider(),
-                    const PopupMenuItem<String>(
-                      value: 'notification_mode',
-                      child: Row(
-                        children: [
-                          Icon(Icons.notifications, color: Colors.pinkAccent),
-                          SizedBox(width: 10),
-                          Text('Notification Mode'),
-                        ],
-                      ),
-                    ),
-                  ],
+            if (_selectedIndex != 3)
+              IconButton(
+                tooltip: 'Search people',
+                onPressed: () => showSearch(
+                  context: context,
+                  delegate: ChatSearchDelegate(),
+                ),
+                icon: const Icon(Icons.search_rounded, color: Colors.white),
+              ),
+            PopupMenuButton<dynamic>(
+              icon: const Icon(Icons.more_vert, color: Colors.white),
+              onSelected: (value) {
+                if (value is ThemeMode) {
+                  widget.onThemeChanged(value);
+                } else if (value == 'notification_mode') {
+                  _showNotificationSettings();
+                }
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem<ThemeMode>(
+                  value: ThemeMode.light,
+                  child: Row(children: [Icon(Icons.light_mode, color: Colors.pinkAccent), SizedBox(width: 10), Text('Light Theme')]),
+                ),
+                const PopupMenuItem<ThemeMode>(
+                  value: ThemeMode.dark,
+                  child: Row(children: [Icon(Icons.dark_mode, color: Colors.pinkAccent), SizedBox(width: 10), Text('Dark Theme')]),
+                ),
+                const PopupMenuItem<ThemeMode>(
+                  value: ThemeMode.system,
+                  child: Row(children: [Icon(Icons.brightness_auto, color: Colors.pinkAccent), SizedBox(width: 10), Text('System Default')]),
+                ),
+                const PopupMenuDivider(),
+                const PopupMenuItem<String>(
+                  value: 'notification_mode',
+                  child: Row(children: [Icon(Icons.notifications, color: Colors.pinkAccent), SizedBox(width: 10), Text('Notification Mode')]),
                 ),
               ],
             ),
@@ -256,17 +209,13 @@ class _HomeScreenState extends State<HomeScreen> {
           ? FloatingActionButton.extended(
               backgroundColor: Colors.pinkAccent,
               elevation: 4,
-              icon: const Icon(Icons.group_add, color: Colors.white),
+              icon: const Icon(Icons.group_add_rounded, color: Colors.white),
               label: const Text(
                 'New Group',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               ),
-              onPressed: () => showDialog<void>(
-                context: context,
-                builder: (context) => const CreateGroupDialog(),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const CreateGroupScreen()),
               ),
             )
           : null,
@@ -274,26 +223,10 @@ class _HomeScreenState extends State<HomeScreen> {
         selectedIndex: _selectedIndex,
         onDestinationSelected: (index) => setState(() => _selectedIndex = index),
         destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.wechat_outlined),
-            selectedIcon: Icon(Icons.wechat, color: Colors.pinkAccent),
-            label: 'Chats',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.message_outlined),
-            selectedIcon: Icon(Icons.message, color: Colors.pinkAccent),
-            label: 'Requests',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person, color: Colors.pinkAccent),
-            label: 'Profile',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings, color: Colors.pinkAccent),
-            label: 'Settings',
-          ),
+          NavigationDestination(icon: Icon(Icons.wechat_outlined), selectedIcon: Icon(Icons.wechat, color: Colors.pinkAccent), label: 'Chats'),
+          NavigationDestination(icon: Icon(Icons.message_outlined), selectedIcon: Icon(Icons.message, color: Colors.pinkAccent), label: 'Requests'),
+          NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person, color: Colors.pinkAccent), label: 'Profile'),
+          NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings, color: Colors.pinkAccent), label: 'Settings'),
         ],
       ),
     );

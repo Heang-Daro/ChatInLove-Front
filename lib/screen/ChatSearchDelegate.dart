@@ -15,19 +15,29 @@ class ChatSearchDelegate extends SearchDelegate<UserResponse?> {
 
   @override
   ThemeData appBarTheme(BuildContext context) {
-    final theme = Theme.of(context);
-    return theme.copyWith(
-      appBarTheme: theme.appBarTheme.copyWith(
-        backgroundColor: theme.colorScheme.surface,
-        foregroundColor: theme.colorScheme.onSurface,
+    final base = Theme.of(context);
+    return base.copyWith(
+      scaffoldBackgroundColor: base.colorScheme.surface,
+      appBarTheme: base.appBarTheme.copyWith(
+        backgroundColor: Colors.pinkAccent,
+        foregroundColor: Colors.white,
+        iconTheme: const IconThemeData(color: Colors.white),
+        actionsIconTheme: const IconThemeData(color: Colors.white),
         elevation: 0,
       ),
-      inputDecorationTheme: theme.inputDecorationTheme.copyWith(
-        hintStyle: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+      inputDecorationTheme: const InputDecorationTheme(
+        hintStyle: TextStyle(color: Colors.white70),
         border: InputBorder.none,
       ),
     );
   }
+
+  @override
+  TextStyle? get searchFieldStyle => const TextStyle(
+        color: Colors.white,
+        fontSize: 18,
+        fontWeight: FontWeight.w500,
+      );
 
   @override
   List<Widget> buildActions(BuildContext context) => [
@@ -125,24 +135,35 @@ class ChatSearchDelegate extends SearchDelegate<UserResponse?> {
         return ListView.separated(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           itemCount: users.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          separatorBuilder: (_, __) => const SizedBox(height: 10),
           itemBuilder: (context, index) {
             final user = users[index];
             return Card(
               margin: EdgeInsets.zero,
+              color: Colors.pinkAccent.withValues(alpha: 0.055),
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+                side: BorderSide(color: Colors.pinkAccent.withValues(alpha: 0.12)),
+              ),
               clipBehavior: Clip.antiAlias,
               child: ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 leading: CircleAvatar(
-                  backgroundColor: Colors.pinkAccent.withValues(alpha: 0.14),
+                  radius: 25,
+                  backgroundColor: Colors.pinkAccent.withValues(alpha: 0.16),
                   child: Text(
                     user.username.isNotEmpty ? user.username[0].toUpperCase() : '?',
-                    style: const TextStyle(color: Colors.pinkAccent, fontWeight: FontWeight.w700),
+                    style: const TextStyle(color: Colors.pinkAccent, fontWeight: FontWeight.w800),
                   ),
                 ),
                 title: Text(user.username, style: const TextStyle(fontWeight: FontWeight.w700)),
                 subtitle: Text(user.email, maxLines: 1, overflow: TextOverflow.ellipsis),
-                trailing: const Icon(Icons.chat_bubble_outline_rounded, color: Colors.pinkAccent),
+                trailing: Container(
+                  padding: const EdgeInsets.all(9),
+                  decoration: BoxDecoration(color: Colors.pinkAccent.withValues(alpha: 0.12), shape: BoxShape.circle),
+                  child: const Icon(Icons.chat_bubble_outline_rounded, color: Colors.pinkAccent, size: 19),
+                ),
                 onTap: _openingConversation
                     ? null
                     : () => _openConversation(context, auth, conversations, user),
