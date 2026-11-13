@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:love_in_chat/data/repositories/chat_repository.dart';
-import 'package:love_in_love/model/Response/ConversationResponse.dart';
+import 'package:love_in_chat/model/Response/ConversationResponse.dart';
 import 'package:love_in_chat/model/emun/ConversationType.dart';
 import '../provider/AuthProvider.dart';
 import '../provider/ConversationProvider.dart';
