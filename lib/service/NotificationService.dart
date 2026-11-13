@@ -13,11 +13,10 @@ class NotificationService {
 
   static Future<void> initialize() async {
     if (kIsWeb) {
-      web_notif.requestWebPermission();
+      await web_notif.registerServiceWorker();
       return;
     }
 
-    // Android initialization settings using the launcher icon
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
 
@@ -32,7 +31,6 @@ class NotificationService {
       },
     );
 
-    // Create high importance Android notification channel with sound & vibration
     const AndroidNotificationChannel channel = AndroidNotificationChannel(
       _channelId,
       _channelName,
@@ -50,23 +48,24 @@ class NotificationService {
       await androidImplementation.createNotificationChannel(channel);
     }
 
-    // Request Android 13+ Notification Permission
     await requestPermission();
   }
 
-  static Future<void> requestPermission() async {
+  static Future<bool> requestPermission() async {
     if (kIsWeb) {
-      web_notif.requestWebPermission();
-      return;
+      await web_notif.registerServiceWorker();
+      return await web_notif.requestWebPermission();
     }
 
     final status = await Permission.notification.status;
     if (status.isDenied || status.isPermanentlyDenied) {
-      await Permission.notification.request();
+      final requested = await Permission.notification.request();
+      return requested.isGranted || requested.isLimited;
     }
+
+    return status.isGranted || status.isLimited;
   }
 
-  /// Post a native system notification in Android notification bar or Web Browser Notification
   static Future<void> showNotification({
     required int id,
     required String title,
@@ -74,7 +73,10 @@ class NotificationService {
     String? payload,
   }) async {
     if (kIsWeb) {
-      web_notif.showWebNotification(title, body);
+      final granted = await requestPermission();
+      if (granted) {
+        web_notif.showWebNotification(title, body);
+      }
       return;
     }
 

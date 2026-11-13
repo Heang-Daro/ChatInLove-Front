@@ -1,21 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:love_in_chat/data/repositories/chat_repository.dart';
-import 'package:love_in_chat/model/Response/ConversationResponse.dart';
-import 'package:love_in_chat/model/emun/ConversationType.dart';
+
 import '../provider/AuthProvider.dart';
 import '../provider/ConversationProvider.dart';
 import '../service/NotificationService.dart';
-import '../util/AnimatedComponents.dart';
-import '../util/AppBarStyle.dart';
-import 'ChatRequestScreen.dart';
-import 'ChatSearchDelegate.dart';
-import 'ConversationPage.dart';
-import 'CreateGroupDialog.dart';
-import 'ProfileScreen.dart';
-import 'setting_util/SettingScreen.dart';
-import 'home_body/all.dart';
-import 'message/ConversationTile.dart';
 
 class HomeScreen extends StatefulWidget {
   final Function(ThemeMode) onThemeChanged;
@@ -42,11 +31,9 @@ class _HomeScreenState extends State<HomeScreen> {
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       final conversationProvider = Provider.of<ConversationProvider>(context, listen: false);
 
-      // Listen for incoming messages on other chats and post native Android status bar notification with ringtone sound!
-      conversationProvider.onNewMessageNotification = (message) {
+      conversationProvider.onNewMessageNotification = (message) async {
         if (!_notificationsEnabled) return;
 
-        // Find conversation details
         final chat = conversationProvider.conversations.firstWhere(
           (c) => c.id == message.conversationId,
           orElse: () => ConversationResponse(
@@ -56,10 +43,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         );
 
-        final chatName = chat.name ?? "New Message";
+        final chatName = chat.name ?? 'New Message';
 
-        // Post native Android system notification in notification bar with sound!
-        NotificationService.showNotification(
+        await NotificationService.showNotification(
           id: message.conversationId.hashCode,
           title: chatName,
           body: message.previewText,
@@ -67,28 +53,32 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       };
 
-      // Initialize real-time WebSocket connection
       conversationProvider.initSocket(authProvider);
 
-      // The offline repository listens to the same socket and writes every
-      // incoming message into the local SQLite database.
       try {
         Provider.of<ChatRepository>(context, listen: false).startListening();
-      } catch (_) {
-        // The repository is optional, the app also works without it.
-      }
+      } catch (_) {}
 
-      // Fetch conversation list
       conversationProvider.fetchConversations(authProvider);
     });
   }
 
-  late final List<Widget> _screens = [
-    const AllChat(),
-    const ChatRequestScreen(),
-    const ProfileScreen(),
-    const SettingScreen(),
-  ];
+  Future<void> _enableWebNotifications() async {
+    if (!kIsWeb) return;
+
+    final granted = await NotificationService.requestPermission();
+    if (!mounted) return;
+
+    if (granted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Browser notifications enabled.')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Notifications were not enabled. Please allow them in your browser settings.')),
+      );
+    }
+  }
 
   void _showNotificationSettings() {
     showDialog(
@@ -101,26 +91,40 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   Icon(Icons.notifications_active, color: Colors.pinkAccent),
                   SizedBox(width: 8),
-                  Text("Notification Mode"),
+                  Text('Notification Mode'),
                 ],
               ),
-              content: SwitchListTile(
-                title: const Text("Phone Notifications"),
-                subtitle: const Text("Show alerts when someone sends a message"),
-                value: _notificationsEnabled,
-                activeColor: Colors.pinkAccent,
-                onChanged: (bool value) {
-                  setDialogState(() => _notificationsEnabled = value);
-                  setState(() => _notificationsEnabled = value);
-                },
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SwitchListTile(
+                    title: const Text('Phone Notifications'),
+                    subtitle: const Text('Show alerts when someone sends a message'),
+                    value: _notificationsEnabled,
+                    activeColor: Colors.pinkAccent,
+                    onChanged: (bool value) {
+                      setDialogState(() => _notificationsEnabled = value);
+                      setState(() => _notificationsEnabled = value);
+                    },
+                  ),
+                  if (kIsWeb)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          onPressed: _enableWebNotifications,
+                          icon: const Icon(Icons.notifications_none),
+                          label: const Text('Enable browser notifications'),
+                        ),
+                      ),
+                    ),
+                ],
               ),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context),
-                  child: const Text(
-                    "Close",
-                    style: TextStyle(color: Colors.pinkAccent),
-                  ),
+                  child: const Text('Close', style: TextStyle(color: Colors.pinkAccent)),
                 ),
               ],
             );
@@ -143,8 +147,8 @@ class _HomeScreenState extends State<HomeScreen> {
               _selectedIndex == 2
                   ? Icons.person
                   : _selectedIndex == 3
-                  ? Icons.settings
-                  : Icons.favorite,
+                      ? Icons.settings
+                      : Icons.favorite,
               color: Colors.white,
               size: 26,
             ),
@@ -152,10 +156,10 @@ class _HomeScreenState extends State<HomeScreen> {
             Expanded(
               child: Text(
                 _selectedIndex == 2
-                    ? "My Profile"
+                    ? 'My Profile'
                     : _selectedIndex == 3
-                    ? "Settings"
-                    : "In Love",
+                        ? 'Settings'
+                        : 'In Love',
                 style: AppBarStyle.titleStyle,
               ),
             ),
@@ -181,7 +185,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   icon: const Icon(Icons.more_vert, color: Colors.white),
                   onSelected: (value) {
                     if (value is ThemeMode) {
-                      widget.onThemeChanged(value);
+                      onThemeChanged(value);
                     } else if (value == 'notification_mode') {
                       _showNotificationSettings();
                     }
@@ -242,7 +246,7 @@ class _HomeScreenState extends State<HomeScreen> {
               elevation: 4,
               icon: const Icon(Icons.group_add, color: Colors.white),
               label: const Text(
-                "New Group",
+                'New Group',
                 style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               ),
               onPressed: () {
@@ -281,64 +285,6 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-    );
-  }
-}
-
-// Chats tab: now uses ConversationTile (correct name + working tap)
-class AllChatWithProvider extends StatelessWidget {
-  const AllChatWithProvider({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Consumer2<ConversationProvider, AuthProvider>(
-      builder: (context, provider, auth, child) {
-        if (provider.isLoading) {
-          return const Center(
-            child: CircularProgressIndicator(color: Colors.pinkAccent),
-          );
-        }
-
-        if (provider.errorMessage != null) {
-          return Center(
-            child: Text(
-              provider.errorMessage!,
-              style: const TextStyle(color: Colors.grey),
-            ),
-          );
-        }
-
-        final conversations = provider.conversations;
-
-        if (conversations.isEmpty) {
-          return const Center(
-            child: Text(
-              "No conversations available",
-              style: TextStyle(color: Colors.grey),
-            ),
-          );
-        }
-
-        final currentUserId = auth.currentUserId;
-        print('AllChatWithProvider currentUserId = $currentUserId');
-
-        if (currentUserId == null || currentUserId.isEmpty) {
-          return const Center(
-            child: CircularProgressIndicator(color: Colors.pinkAccent),
-          );
-        }
-
-        return ListView.builder(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          itemCount: conversations.length,
-          itemBuilder: (context, index) {
-            return ConversationTile(
-              chat: conversations[index],
-              currentUserId: currentUserId,
-            );
-          },
-        );
-      },
     );
   }
 }
