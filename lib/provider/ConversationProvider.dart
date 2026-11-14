@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:love_in_chat/model/Response/ConversationResponse.dart';
 import 'package:love_in_chat/model/Response/MessageResponse.dart';
+import 'package:love_in_chat/model/emun/ConversationStatus.dart';
 import 'package:love_in_chat/model/emun/MessageType.dart';
 
 import '../api/api.dart';
@@ -280,6 +281,8 @@ class ConversationProvider extends ChangeNotifier {
           lastMessageAt: message.createdAt ?? DateTime.now(),
           members: targetChat.members,
           lastMessage: message,
+          status: targetChat.status,
+          requesterId: targetChat.requesterId,
         );
         _conversations.insert(0, updatedChat);
       }
@@ -699,6 +702,8 @@ class ConversationProvider extends ChangeNotifier {
             lastMessageAt: newMessage.createdAt ?? DateTime.now(),
             members: targetChat.members,
             lastMessage: newMessage,
+            status: targetChat.status,
+            requesterId: targetChat.requesterId,
           );
           _conversations.insert(0, updatedChat);
         } else {
@@ -1007,6 +1012,8 @@ class ConversationProvider extends ChangeNotifier {
           lastMessageAt: m.createdAt ?? DateTime.now(),
           members: targetChat.members,
           lastMessage: m,
+          status: targetChat.status,
+          requesterId: targetChat.requesterId,
         );
         _conversations.insert(0, updatedChat);
       } else {
@@ -1039,6 +1046,65 @@ class ConversationProvider extends ChangeNotifier {
       notifyListeners();
     } else {
       onNewMessageNotification?.call(message);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // 8. Chat Request Actions (accept / reject)
+  // ---------------------------------------------------------------------------
+
+  /// All private conversations waiting for the current user to respond.
+  List<ConversationResponse> pendingRequests(String currentUserId) {
+    return _conversations.where((c) =>
+        c.status == ConversationStatus.PENDING &&
+        c.requesterId != null &&
+        c.requesterId != currentUserId).toList();
+  }
+
+  Future<bool> acceptRequest(AuthProvider authProvider, String conversationId) async {
+    try {
+      final response = await authProvider.authorizedRequest((token) async {
+        return await http.post(
+          Uri.parse('$baseUrl/$conversationId/accept'),
+          headers: _headers(token),
+        );
+      }).timeout(_timeout);
+
+      if (response.statusCode == 200) {
+        final updated = ConversationResponse.fromJson(json.decode(response.body));
+        _upsertConversationAtTop(updated);
+        _scheduleConversationCacheSave(authProvider);
+        notifyListeners();
+        return true;
+      }
+      debugPrint('acceptRequest failed: ${response.statusCode} ${response.body}');
+      return false;
+    } catch (e) {
+      debugPrint('acceptRequest error: $e');
+      return false;
+    }
+  }
+
+  Future<bool> rejectRequest(AuthProvider authProvider, String conversationId) async {
+    try {
+      final response = await authProvider.authorizedRequest((token) async {
+        return await http.post(
+          Uri.parse('$baseUrl/$conversationId/reject'),
+          headers: _headers(token),
+        );
+      }).timeout(_timeout);
+
+      if (response.statusCode == 200 || response.statusCode == 204) {
+        _conversations.removeWhere((c) => c.id == conversationId);
+        _scheduleConversationCacheSave(authProvider);
+        notifyListeners();
+        return true;
+      }
+      debugPrint('rejectRequest failed: ${response.statusCode} ${response.body}');
+      return false;
+    } catch (e) {
+      debugPrint('rejectRequest error: $e');
+      return false;
     }
   }
 }
