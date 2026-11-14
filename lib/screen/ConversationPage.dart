@@ -43,6 +43,10 @@ class _ConversationPageState extends State<ConversationPage> {
   bool _isRecording = false;
   DateTime? _lastTypingEventTime;
 
+  // ── #loop macro state ─────────────────────────────────────────────────────
+  bool _loopRunning = false;
+  bool _loopCancelled = false;
+
   @override
   void initState() {
     super.initState();
@@ -79,6 +83,67 @@ class _ConversationPageState extends State<ConversationPage> {
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
+
+    // ── #loop macro interception ──────────────────────────────────────────
+    // Syntax: #loop [count] <message>
+    //   #loop Hello               → sends "Hello" 100 times
+    //   #loop 50 Hello            → sends "Hello" 50 times
+    //   #loop 200 Hello           → capped to 100, sends "Hello" 100 times
+    final loopMatch = RegExp(
+      r'^#loop\s+(?:(\d+)\s+)?(.+)$',
+      caseSensitive: false,
+    ).firstMatch(text);
+
+    if (loopMatch != null) {
+      _messageController.clear(); // remove #loop from input immediately
+
+      if (_loopRunning) {
+        // A loop is already in progress — cancel it.
+        _loopCancelled = true;
+        return;
+      }
+
+      final requestedCount = int.tryParse(loopMatch.group(1) ?? '') ?? 100;
+      final count   = requestedCount.clamp(1, 100);
+      final message = loopMatch.group(2)!.trim();
+
+      if (message.isEmpty) return;
+
+      _loopRunning   = true;
+      _loopCancelled = false;
+
+      // Show a persistent snackbar so the user can cancel.
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: StatefulBuilder(
+              builder: (ctx, setSnack) => Row(children: [
+                Expanded(
+                  child: Text(
+                    'Sending "$message" × $count…',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                TextButton(
+                  onPressed: () {
+                    _loopCancelled = true;
+                    ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
+                  },
+                  child: const Text('Cancel',
+                      style: TextStyle(color: Colors.white)),
+                ),
+              ]),
+            ),
+            duration: Duration(seconds: count * 2), // generous upper bound
+            backgroundColor: Colors.pinkAccent,
+          ),
+        );
+      }
+
+      _runLoop(message, count);
+      return;
+    }
+    // ── Normal send ───────────────────────────────────────────────────────
     _messageController.clear();
     final conversations = context.read<ConversationProvider>();
     conversations.sendTyping(widget.conversationId, isTyping: false);
@@ -87,6 +152,34 @@ class _ConversationPageState extends State<ConversationPage> {
       widget.conversationId,
       text,
     );
+  }
+
+  /// Sends [message] up to [count] times with a 150 ms gap.
+  /// Runs entirely in the background — the UI stays responsive.
+  Future<void> _runLoop(String message, int count) async {
+    final auth  = context.read<AuthProvider>();
+    final convos = context.read<ConversationProvider>();
+    int sent = 0;
+
+    for (var i = 0; i < count; i++) {
+      if (_loopCancelled || !mounted) break;
+      await convos.sendMessage(auth, widget.conversationId, message);
+      sent++;
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+
+    if (!mounted) return;
+    _loopRunning   = false;
+    _loopCancelled = false;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('Sent "$message" $sent time${sent == 1 ? '' : 's'}.'),
+          duration: const Duration(seconds: 3),
+          backgroundColor: Colors.pinkAccent,
+        ),
+      );
   }
 
   Future<void> _sendLike() => context.read<ConversationProvider>().sendMessage(
