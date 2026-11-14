@@ -31,6 +31,7 @@ class ConversationProvider extends ChangeNotifier {
 
   // ---- Conversations state ----
   List<ConversationResponse> _conversations = [];
+  List<ConversationResponse> _pendingRequests = [];
   bool _isLoading = false;
   bool _isLoadingMoreConversations = false;
   bool _isFetchingConversations = false;
@@ -68,6 +69,7 @@ class ConversationProvider extends ChangeNotifier {
   Timer? _messageCacheTimer;
 
   List<ConversationResponse> get conversations => _conversations;
+  List<ConversationResponse> get incomingRequests => _pendingRequests;
   List<MessageResponse> get currentMessages => _currentMessages;
   bool get isLoading => _isLoading;
   bool get isLoadingMoreConversations => _isLoadingMoreConversations;
@@ -391,6 +393,43 @@ class ConversationProvider extends ChangeNotifier {
     }
   }
 
+  /// Fetches pending chat requests directed at the current user from the
+  /// dedicated server endpoint GET /api/conversations/requests.
+  Future<void> fetchPendingRequests(AuthProvider authProvider) async {
+    try {
+      final response = await authProvider.authorizedRequest((token) async {
+        return await http.get(
+          Uri.parse('$baseUrl/requests').replace(
+              queryParameters: {'page': '0', 'size': '50'}),
+          headers: _headers(token),
+        );
+      }).timeout(_timeout);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        List<ConversationResponse> list = [];
+        if (data is Map<String, dynamic> && data.containsKey('content')) {
+          list = (data['content'] as List)
+              .map((e) => ConversationResponse.fromJson(e))
+              .toList();
+        } else if (data is List) {
+          list = data.map((e) => ConversationResponse.fromJson(e)).toList();
+        }
+        _pendingRequests = list;
+        // Subscribe to WebSocket topics for incoming request conversations
+        // so the sender's first message triggers a real-time notification.
+        for (final req in _pendingRequests) {
+          _stompService.subscribeToConversation(req.id, (message) {
+            handleIncomingPrivateMessage(authProvider, message);
+          });
+        }
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('fetchPendingRequests error: $e');
+    }
+  }
+
   Future<void> _fetchConversationsInternal(AuthProvider authProvider) async {
     // 1. Offline-first: show the cached list immediately (no spinner if the
     //    cache already has something to show).
@@ -449,6 +488,9 @@ class ConversationProvider extends ChangeNotifier {
 
         // Bind real-time WebSocket subscriptions for all user conversations
         _bindAllConversationTopicSubscriptions(authProvider);
+
+        // Also refresh the incoming requests list in the background.
+        fetchPendingRequests(authProvider);
       } else if (_conversations.isEmpty) {
         _errorMessage = "Failed to load conversations";
       }
@@ -1035,7 +1077,9 @@ class ConversationProvider extends ChangeNotifier {
   void handleIncomingPrivateMessage(AuthProvider authProvider, MessageResponse message) {
     final known = _conversations.any((c) => c.id == message.conversationId);
     if (!known) {
+      // Might be a new chat request — refresh both lists.
       fetchConversations(authProvider);
+      fetchPendingRequests(authProvider);
     }
 
     handleChatEvent(authProvider, ChatEvent(ChatEventType.created, message));
@@ -1053,13 +1097,9 @@ class ConversationProvider extends ChangeNotifier {
   // 8. Chat Request Actions (accept / reject)
   // ---------------------------------------------------------------------------
 
-  /// All private conversations waiting for the current user to respond.
-  List<ConversationResponse> pendingRequests(String currentUserId) {
-    return _conversations.where((c) =>
-        c.status == ConversationStatus.PENDING &&
-        c.requesterId != null &&
-        c.requesterId != currentUserId).toList();
-  }
+  /// Incoming chat requests directed at the current user.
+  /// Sourced from the dedicated GET /api/conversations/requests endpoint.
+  List<ConversationResponse> pendingRequests(String currentUserId) => _pendingRequests;
 
   Future<bool> acceptRequest(AuthProvider authProvider, String conversationId) async {
     try {
@@ -1072,6 +1112,8 @@ class ConversationProvider extends ChangeNotifier {
 
       if (response.statusCode == 200) {
         final updated = ConversationResponse.fromJson(json.decode(response.body));
+        // Move from pending list into accepted conversations.
+        _pendingRequests.removeWhere((c) => c.id == conversationId);
         _upsertConversationAtTop(updated);
         _scheduleConversationCacheSave(authProvider);
         notifyListeners();
@@ -1095,6 +1137,7 @@ class ConversationProvider extends ChangeNotifier {
       }).timeout(_timeout);
 
       if (response.statusCode == 200 || response.statusCode == 204) {
+        _pendingRequests.removeWhere((c) => c.id == conversationId);
         _conversations.removeWhere((c) => c.id == conversationId);
         _scheduleConversationCacheSave(authProvider);
         notifyListeners();

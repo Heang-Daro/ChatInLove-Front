@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
 import 'package:love_in_chat/model/Response/ConversationResponse.dart';
+import '../../model/emun/ConversationStatus.dart';
 import '../../model/emun/ConversationType.dart';
 import '../message/ConversationTile.dart';
 import 'private.dart';
@@ -63,7 +64,9 @@ class _AllChatState extends State<AllChat> with SingleTickerProviderStateMixin {
   Widget build(BuildContext context) {
     return Consumer<ConversationProvider>(
       builder: (context, conversationProvider, child) {
-        final allConversations = conversationProvider.conversations;
+        final allConversations = conversationProvider.conversations
+            .where((c) => c.status != ConversationStatus.PENDING)
+            .toList();
 
         // Filter chats using your ConversationType enum
         final privateChats = allConversations.where((c) => c.type == ConversationType.PRIVATE).toList();

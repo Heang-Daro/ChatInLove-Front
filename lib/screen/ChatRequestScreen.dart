@@ -20,7 +20,7 @@ class _ChatRequestScreenState extends State<ChatRequestScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final auth = context.read<AuthProvider>();
-      context.read<ConversationProvider>().fetchConversations(auth);
+      context.read<ConversationProvider>().fetchPendingRequests(auth);
     });
   }
 
@@ -54,8 +54,7 @@ class _ChatRequestScreenState extends State<ChatRequestScreen> {
   Widget build(BuildContext context) {
     return Consumer2<AuthProvider, ConversationProvider>(
       builder: (context, auth, convo, _) {
-        final currentUserId = auth.currentUserId ?? '';
-        final requests = convo.pendingRequests(currentUserId);
+        final requests = convo.incomingRequests;
 
         if (convo.isLoading) {
           return const Center(child: CircularProgressIndicator(color: Colors.pinkAccent));

@@ -223,11 +223,47 @@ class _HomeScreenState extends State<HomeScreen> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (index) => setState(() => _selectedIndex = index),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.wechat_outlined), selectedIcon: Icon(Icons.wechat, color: Colors.pinkAccent), label: 'Chats'),
-          NavigationDestination(icon: Icon(Icons.message_outlined), selectedIcon: Icon(Icons.message, color: Colors.pinkAccent), label: 'Requests'),
-          NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person, color: Colors.pinkAccent), label: 'Profile'),
-          NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings, color: Colors.pinkAccent), label: 'Settings'),
+        destinations: [
+          const NavigationDestination(
+            icon: Icon(Icons.wechat_outlined),
+            selectedIcon: Icon(Icons.wechat, color: Colors.pinkAccent),
+            label: 'Chats',
+          ),
+          NavigationDestination(
+            icon: Consumer<ConversationProvider>(
+              builder: (_, convo, __) {
+                final count = convo.incomingRequests.length;
+                if (count == 0) return const Icon(Icons.message_outlined);
+                return Badge(
+                  label: Text('$count'),
+                  backgroundColor: Colors.pinkAccent,
+                  child: const Icon(Icons.message_outlined),
+                );
+              },
+            ),
+            selectedIcon: Consumer<ConversationProvider>(
+              builder: (_, convo, __) {
+                final count = convo.incomingRequests.length;
+                if (count == 0) return const Icon(Icons.message, color: Colors.pinkAccent);
+                return Badge(
+                  label: Text('$count'),
+                  backgroundColor: Colors.pinkAccent,
+                  child: const Icon(Icons.message, color: Colors.pinkAccent),
+                );
+              },
+            ),
+            label: 'Requests',
+          ),
+          const NavigationDestination(
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person, color: Colors.pinkAccent),
+            label: 'Profile',
+          ),
+          const NavigationDestination(
+            icon: Icon(Icons.settings_outlined),
+            selectedIcon: Icon(Icons.settings, color: Colors.pinkAccent),
+            label: 'Settings',
+          ),
         ],
       ),
     );
