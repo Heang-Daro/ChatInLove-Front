@@ -1074,6 +1074,32 @@ class ConversationProvider extends ChangeNotifier {
 
   void Function(MessageResponse message)? onNewMessageNotification;
 
+  /// Clears all in-memory conversation and message state when the user switches
+  /// accounts. The local disk cache is NOT cleared here — CacheService.clearUser
+  /// handles that in AuthProvider. Called by AccountSwitcherScreen.
+  void resetForAccountSwitch() {
+    _conversations = [];
+    _pendingRequests = [];
+    _currentMessages = [];
+    _conversationPage = 0;
+    _messagePage = 0;
+    _hasMoreConversations = true;
+    _hasMoreMessages = true;
+    _activeConversationId = null;
+    _lastMarkedReadId = null;
+    _errorMessage = null;
+    _showingCachedData = false;
+    _lastServerSyncAt = null;
+    _searchResults = [];
+    _activeTypingUser = null;
+    _typingTimer?.cancel();
+    _conversationCacheTimer?.cancel();
+    _messageCacheTimer?.cancel();
+    authProviderUserId = null;
+    _stompService.disconnect();
+    notifyListeners();
+  }
+
   void handleIncomingPrivateMessage(AuthProvider authProvider, MessageResponse message) {
     final known = _conversations.any((c) => c.id == message.conversationId);
     if (!known) {

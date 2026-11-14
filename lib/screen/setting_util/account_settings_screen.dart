@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import '../../util/AppBarStyle.dart';
+import 'AccountSwitcherScreen.dart';
 
 class AccountSettingsScreen extends StatelessWidget {
   const AccountSettingsScreen({super.key});
@@ -111,6 +112,20 @@ class AccountSettingsScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 24),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.pinkAccent,
+              side: const BorderSide(color: Colors.pinkAccent),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const AccountSwitcherScreen()),
+            ),
+            icon: const Icon(Icons.switch_account_outlined),
+            label: const Text('Switch / add account'),
+          ),
+          const SizedBox(height: 12),
           OutlinedButton.icon(
             style: OutlinedButton.styleFrom(
               foregroundColor: Colors.redAccent,

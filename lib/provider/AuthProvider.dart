@@ -7,11 +7,14 @@ import 'package:http_parser/http_parser.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+typedef ConversationProviderResetter = void Function();
+
 import 'package:love_in_chat/api/api.dart';
 import 'package:love_in_chat/model/Request/LoginRequest.dart';
 import 'package:love_in_chat/model/Request/RegisterRequest.dart';
 import 'package:love_in_chat/model/Response/AuthResponse.dart';
 import '../model/Response/UserResponse.dart';
+import '../service/AccountManager.dart';
 import '../service/CacheService.dart';
 import '../service/DeviceLocationService.dart';
 
@@ -306,6 +309,16 @@ class AuthProvider extends ChangeNotifier {
         final auth = AuthResponse.fromJson(json.decode(response.body));
         await _saveTokens(auth.accessToken, auth.refreshToken);
         await _fetchUserProfile(auth.accessToken);
+        // Persist this account for multi-account switching.
+        if (_currentUser != null) {
+          await AccountManager.saveAccount(SavedAccount(
+            userId: _currentUser!.id,
+            email: _currentUser!.email,
+            username: _currentUser!.username,
+            profileImageUrl: _currentUser!.profileImageUrl,
+            refreshToken: auth.refreshToken,
+          ));
+        }
         _isLoading = false; notifyListeners(); return true;
       }
       _errorMessage = 'Invalid email or password';
@@ -324,6 +337,15 @@ class AuthProvider extends ChangeNotifier {
         final auth = AuthResponse.fromJson(json.decode(response.body));
         await _saveTokens(auth.accessToken, auth.refreshToken);
         await _fetchUserProfile(auth.accessToken);
+        if (_currentUser != null) {
+          await AccountManager.saveAccount(SavedAccount(
+            userId: _currentUser!.id,
+            email: _currentUser!.email,
+            username: _currentUser!.username,
+            profileImageUrl: _currentUser!.profileImageUrl,
+            refreshToken: auth.refreshToken,
+          ));
+        }
         _isLoading = false; notifyListeners(); return true;
       }
       _errorMessage = 'Registration failed';
@@ -356,6 +378,91 @@ class AuthProvider extends ChangeNotifier {
     await prefs.remove(_accessKey); await prefs.remove(_refreshKey);
     _accessToken = null; _refreshToken = null; _currentUser = null;
     if (userId != null && userId.isNotEmpty) await CacheService.clearUser(userId);
+    // Remove from saved accounts so it no longer appears in the switcher.
+    if (userId != null && userId.isNotEmpty) {
+      await AccountManager.removeAccount(userId);
+    }
+    notifyListeners();
+  }
+
+  /// Switches to a different already-saved account using its stored refresh
+  /// token. Returns true on success. The caller should reset the
+  /// ConversationProvider after switching.
+  Future<bool> switchToAccount(String userId) async {
+    final saved = await AccountManager.getAccount(userId);
+    if (saved == null || saved.refreshToken.isEmpty) return false;
+
+    _isLoading = true; notifyListeners();
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/refresh'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'refreshToken': saved.refreshToken}),
+      ).timeout(_timeout);
+
+      if (response.statusCode == 200) {
+        final auth = AuthResponse.fromJson(json.decode(response.body));
+        await _saveTokens(auth.accessToken, auth.refreshToken);
+        await _fetchUserProfile(auth.accessToken);
+        // Update the stored refresh token so next switch also works.
+        await AccountManager.updateAccount(
+          userId: userId,
+          refreshToken: auth.refreshToken,
+          username: _currentUser?.username,
+          profileImageUrl: _currentUser?.profileImageUrl,
+        );
+        await AccountManager.setActiveUserId(userId);
+        _isLoading = false; notifyListeners(); return true;
+      }
+      // Refresh failed — the saved session expired. Remove it.
+      await AccountManager.removeAccount(userId);
+      _isLoading = false; notifyListeners(); return false;
+    } catch (e) {
+      debugPrint('switchToAccount error: $e');
+      _isLoading = false; notifyListeners(); return false;
+    }
+  }
+
+  /// Logs out of the current account WITHOUT removing it from the saved list,
+  /// then immediately switches to [userId]. Used by the account switcher.
+  Future<bool> switchAccount(String userId, ConversationProviderResetter? resetter) async {
+    // Soft-logout: clear tokens but keep the account in the saved list.
+    final oldUserId = currentUserId;
+    final token = _accessToken;
+    if (token != null && token.isNotEmpty) {
+      try {
+        await http.post(Uri.parse('$baseUrl/logout'), headers: {'Authorization': 'Bearer $token'})
+            .timeout(const Duration(seconds: 5));
+      } catch (_) {}
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_accessKey); await prefs.remove(_refreshKey);
+    _accessToken = null; _refreshToken = null; _currentUser = null;
+    if (oldUserId != null) await CacheService.clearUser(oldUserId);
+    resetter?.call();
+
+    return switchToAccount(userId);
+  }
+
+  /// Clears the active session tokens and in-memory state WITHOUT removing
+  /// the account from the saved accounts list. Used when "Add account" is
+  /// tapped — the user wants to sign in with a different account while still
+  /// being able to switch back.
+  Future<void> softLogout() async {
+    final token = _accessToken;
+    if (token != null && token.isNotEmpty) {
+      try {
+        await http.post(Uri.parse('$baseUrl/logout'),
+                headers: {'Authorization': 'Bearer $token'})
+            .timeout(const Duration(seconds: 5));
+      } catch (_) {}
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_accessKey);
+    await prefs.remove(_refreshKey);
+    _accessToken = null;
+    _refreshToken = null;
+    _currentUser = null;
     notifyListeners();
   }
 }

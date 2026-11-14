@@ -4,6 +4,7 @@ import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
 
 import '../chat/chat_list_screen.dart';
+import 'AccountSwitcherScreen.dart';
 import 'CacheScreen.dart';
 import 'account_settings_screen.dart';
 import 'chat_settings_screen.dart';
@@ -32,6 +33,14 @@ class SettingScreen extends StatelessWidget {
                 subtitle: const Text('View your profile information and sign-in'),
                 trailing: const Icon(Icons.arrow_forward_ios, size: 16),
                 onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AccountSettingsScreen())),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.switch_account_outlined, color: Colors.pinkAccent),
+                title: const Text('Switch account'),
+                subtitle: const Text('Use a different account or add a new one'),
+                trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AccountSwitcherScreen())),
               ),
               const Divider(height: 1),
               ListTile(
