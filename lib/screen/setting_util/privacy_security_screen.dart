@@ -1,6 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 
+import 'package:love_in_chat/api/api.dart';
+import 'package:love_in_chat/model/Response/UserResponse.dart';
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import '../../util/AppBarStyle.dart';
 
@@ -19,6 +24,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
   final _currentPasswordController = TextEditingController();
   final _newPasswordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  bool _loadingProfile = true;
   bool _savingProfile = false;
   bool _changingPassword = false;
   bool _hideCurrentPassword = true;
@@ -31,6 +37,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
     final user = context.read<AuthProvider>().currentUser;
     _usernameController = TextEditingController(text: user?.username ?? '');
     _emailController = TextEditingController(text: user?.email ?? '');
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadProfileFromServer());
   }
 
   @override
@@ -41,6 +48,40 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
     _newPasswordController.dispose();
     _confirmPasswordController.dispose();
     super.dispose();
+  }
+
+  /// Load the principal directly before showing editable account data. This
+  /// avoids initializing the form from an old or partially loaded in-memory user.
+  Future<void> _loadProfileFromServer() async {
+    final auth = context.read<AuthProvider>();
+    try {
+      final response = await auth.authorizedRequest((token) => http.get(
+            Uri.parse('${REST_URL}/api/auth/principal'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+          ));
+
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        final user = UserResponse.fromJson(
+          Map<String, dynamic>.from(json.decode(response.body) as Map),
+        );
+        setState(() {
+          _usernameController.text = user.username;
+          _emailController.text = user.email;
+          _loadingProfile = false;
+        });
+      } else {
+        setState(() => _loadingProfile = false);
+        _showMessage('Could not load your latest account information.', isError: true);
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingProfile = false);
+      _showMessage('Could not load your latest account information. Check your connection.', isError: true);
+    }
   }
 
   Future<void> _saveProfile() async {
@@ -139,6 +180,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                   TextFormField(
                     controller: _usernameController,
                     textCapitalization: TextCapitalization.none,
+                    enabled: !_loadingProfile && !_savingProfile,
                     validator: (value) {
                       final text = value?.trim() ?? '';
                       if (text.isEmpty) return 'Username is required';
@@ -151,6 +193,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                   TextFormField(
                     controller: _emailController,
                     keyboardType: TextInputType.emailAddress,
+                    enabled: !_loadingProfile && !_savingProfile,
                     validator: (value) {
                       final email = value?.trim() ?? '';
                       if (email.isEmpty) return 'Email is required';
@@ -165,15 +208,15 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton.icon(
-                      onPressed: _savingProfile ? null : _saveProfile,
+                      onPressed: _loadingProfile || _savingProfile ? null : _saveProfile,
                       style: FilledButton.styleFrom(
                         backgroundColor: Colors.pinkAccent,
                         padding: const EdgeInsets.symmetric(vertical: 14),
                       ),
-                      icon: _savingProfile
+                      icon: _loadingProfile || _savingProfile
                           ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                           : const Icon(Icons.save_outlined),
-                      label: Text(_savingProfile ? 'Saving...' : 'Save information'),
+                      label: Text(_loadingProfile ? 'Loading information...' : _savingProfile ? 'Saving...' : 'Save information'),
                     ),
                   ),
                 ],
@@ -213,9 +256,7 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                     controller: _confirmPasswordController,
                     hidden: _hideConfirmPassword,
                     toggle: () => setState(() => _hideConfirmPassword = !_hideConfirmPassword),
-                    validator: (value) => value != _newPasswordController.text
-                        ? 'Passwords do not match'
-                        : null,
+                    validator: (value) => value != _newPasswordController.text ? 'Passwords do not match' : null,
                   ),
                   const SizedBox(height: 18),
                   SizedBox(
