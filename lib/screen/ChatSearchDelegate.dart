@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import 'package:love_in_chat/model/Response/UserResponse.dart';
 import 'package:love_in_chat/model/Response/ConversationResponse.dart';
+import 'package:love_in_chat/model/emun/ConversationStatus.dart';
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
 import 'ConversationPage.dart';
@@ -193,11 +194,25 @@ class ChatSearchDelegate extends SearchDelegate<UserResponse?> {
       final ConversationResponse? conversation =
           await conversations.createPrivateConversation(auth, user.id);
       if (!context.mounted) return;
-      Navigator.of(context, rootNavigator: true).pop();
+      Navigator.of(context, rootNavigator: true).pop(); // dismiss spinner
 
       if (conversation == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Could not open this conversation. Please try again.')),
+        );
+        return;
+      }
+
+      // The backend may return a PENDING conversation when the recipient must
+      // approve the request first. Opening the chat in that state causes a 403
+      // which previously triggered a logout. Show a friendly message instead.
+      if (conversation.status == ConversationStatus.PENDING) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Chat request sent to ${user.username}. You can chat once they accept.'),
+            backgroundColor: Colors.pinkAccent,
+            behavior: SnackBarBehavior.floating,
+          ),
         );
         return;
       }

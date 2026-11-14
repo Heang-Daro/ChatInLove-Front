@@ -152,10 +152,13 @@ class AuthProvider extends ChangeNotifier {
       token = _accessToken!;
     }
     var response = await send(token).timeout(_timeout);
-    if (response.statusCode == 401 || response.statusCode == 403) {
+    // Only 401 (token expired/invalid) triggers a refresh+retry.
+    // 403 is a resource-level permission denial (e.g. PENDING conversation) —
+    // it must be returned to the caller, NOT treated as a session error.
+    if (response.statusCode == 401) {
       if (await refreshAccessToken()) {
         response = await send(_accessToken!).timeout(_timeout);
-        if (response.statusCode == 401 || response.statusCode == 403) { await logout(); throw StateError('Unauthorized access'); }
+        if (response.statusCode == 401) { await logout(); throw StateError('Unauthorized access'); }
       } else { await logout(); throw StateError('Session refresh failed'); }
     }
     return response;
@@ -206,8 +209,8 @@ class AuthProvider extends ChangeNotifier {
 
       var response = await doUpload(token);
 
-      // Transparent token refresh on 401/403.
-      if (response.statusCode == 401 || response.statusCode == 403) {
+      // Transparent token refresh on 401 (expired token) only.
+      if (response.statusCode == 401) {
         if (await refreshAccessToken()) {
           response = await doUpload(_accessToken!);
         } else {
