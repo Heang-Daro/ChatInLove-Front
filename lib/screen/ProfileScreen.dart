@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:love_in_chat/provider/AuthProvider.dart';
-import '../setting_util/privacy_security_screen.dart';
+import 'setting_util/privacy_security_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -20,12 +20,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final image = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
     if (image == null || !mounted) return;
     setState(() {
-      if (foreground) { _uploadingForeground = true; } else { _uploadingProfile = true; }
+      if (foreground) {
+        _uploadingForeground = true;
+      } else {
+        _uploadingProfile = true;
+      }
     });
     final error = await context.read<AuthProvider>().uploadUserImage(image, foreground: foreground);
     if (!mounted) return;
     setState(() {
-      if (foreground) { _uploadingForeground = false; } else { _uploadingProfile = false; }
+      if (foreground) {
+        _uploadingForeground = false;
+      } else {
+        _uploadingProfile = false;
+      }
     });
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(error ?? (foreground ? 'Foreground image updated.' : 'Profile photo updated.')),
@@ -59,7 +67,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             ),
             Positioned(
-              right: 12, top: 12,
+              right: 12,
+              top: 12,
               child: IconButton.filledTonal(
                 tooltip: 'Change foreground image',
                 onPressed: _uploadingForeground ? null : () => _pickAndUpload(foreground: true),
