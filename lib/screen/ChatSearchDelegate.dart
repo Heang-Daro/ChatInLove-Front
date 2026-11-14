@@ -2,15 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'package:love_in_chat/model/Response/UserResponse.dart';
-import 'package:love_in_chat/model/Response/ConversationResponse.dart';
-import 'package:love_in_chat/model/emun/ConversationStatus.dart';
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
-import 'ConversationPage.dart';
+import 'UserProfileScreen.dart';
 
 class ChatSearchDelegate extends SearchDelegate<UserResponse?> {
   final Map<String, Future<List<UserResponse>>> _searches = {};
-  bool _openingConversation = false;
 
   ChatSearchDelegate() : super(searchFieldLabel: 'Search people by username');
 
@@ -75,18 +72,23 @@ class ChatSearchDelegate extends SearchDelegate<UserResponse?> {
                   color: Colors.pinkAccent.withValues(alpha: 0.1),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.person_search_rounded, size: 38, color: Colors.pinkAccent),
+                child: const Icon(Icons.person_search_rounded,
+                    size: 38, color: Colors.pinkAccent),
               ),
               const SizedBox(height: 16),
               Text(
                 'Find someone to chat with',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                style: Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 6),
               Text(
                 'Type a username above to find people on In Love.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
               ),
             ],
           ),
@@ -99,6 +101,7 @@ class ChatSearchDelegate extends SearchDelegate<UserResponse?> {
   Widget _buildResults(BuildContext context) {
     final auth = context.read<AuthProvider>();
     final conversations = context.read<ConversationProvider>();
+    final currentUserId = auth.currentUserId ?? '';
     final term = query.trim();
     final future = _searches.putIfAbsent(
       term,
@@ -110,7 +113,8 @@ class ChatSearchDelegate extends SearchDelegate<UserResponse?> {
       future: future,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator(color: Colors.pinkAccent));
+          return const Center(
+              child: CircularProgressIndicator(color: Colors.pinkAccent));
         }
         if (snapshot.hasError) {
           return _SearchState(
@@ -125,7 +129,11 @@ class ChatSearchDelegate extends SearchDelegate<UserResponse?> {
         }
 
         final users = snapshot.data ?? const <UserResponse>[];
-        if (users.isEmpty) {
+        // Hide the current user from their own search results.
+        final filtered =
+            users.where((u) => u.id != currentUserId).toList();
+
+        if (filtered.isEmpty) {
           return const _SearchState(
             icon: Icons.person_off_outlined,
             title: 'No people found',
@@ -135,40 +143,14 @@ class ChatSearchDelegate extends SearchDelegate<UserResponse?> {
 
         return ListView.separated(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-          itemCount: users.length,
+          itemCount: filtered.length,
           separatorBuilder: (_, __) => const SizedBox(height: 10),
           itemBuilder: (context, index) {
-            final user = users[index];
-            return Card(
-              margin: EdgeInsets.zero,
-              color: Colors.pinkAccent.withValues(alpha: 0.055),
-              elevation: 0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18),
-                side: BorderSide(color: Colors.pinkAccent.withValues(alpha: 0.12)),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                leading: CircleAvatar(
-                  radius: 25,
-                  backgroundColor: Colors.pinkAccent.withValues(alpha: 0.16),
-                  child: Text(
-                    user.username.isNotEmpty ? user.username[0].toUpperCase() : '?',
-                    style: const TextStyle(color: Colors.pinkAccent, fontWeight: FontWeight.w800),
-                  ),
-                ),
-                title: Text(user.username, style: const TextStyle(fontWeight: FontWeight.w700)),
-                subtitle: Text(user.email, maxLines: 1, overflow: TextOverflow.ellipsis),
-                trailing: Container(
-                  padding: const EdgeInsets.all(9),
-                  decoration: BoxDecoration(color: Colors.pinkAccent.withValues(alpha: 0.12), shape: BoxShape.circle),
-                  child: const Icon(Icons.chat_bubble_outline_rounded, color: Colors.pinkAccent, size: 19),
-                ),
-                onTap: _openingConversation
-                    ? null
-                    : () => _openConversation(context, auth, conversations, user),
-              ),
+            final user = filtered[index];
+            return _UserSearchCard(
+              user: user,
+              onViewProfile: () => _openProfile(context, user),
+              onSendMessage: () => _openProfile(context, user, jumpToMessage: true),
             );
           },
         );
@@ -176,71 +158,158 @@ class ChatSearchDelegate extends SearchDelegate<UserResponse?> {
     );
   }
 
-  Future<void> _openConversation(
-    BuildContext context,
-    AuthProvider auth,
-    ConversationProvider conversations,
-    UserResponse user,
-  ) async {
-    if (_openingConversation) return;
-    _openingConversation = true;
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const Center(child: CircularProgressIndicator(color: Colors.pinkAccent)),
-    );
-
-    try {
-      final ConversationResponse? conversation =
-          await conversations.createPrivateConversation(auth, user.id);
-      if (!context.mounted) return;
-      Navigator.of(context, rootNavigator: true).pop(); // dismiss spinner
-
-      if (conversation == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not open this conversation. Please try again.')),
-        );
-        return;
-      }
-
-      // The backend may return a PENDING conversation when the recipient must
-      // approve the request first. Opening the chat in that state causes a 403
-      // which previously triggered a logout. Show a friendly message instead.
-      if (conversation.status == ConversationStatus.PENDING) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Chat request sent to ${user.username}. You can chat once they accept.'),
-            backgroundColor: Colors.pinkAccent,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-        return;
-      }
-
-      close(context, user);
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => ConversationPage(
-            conversationId: conversation.id,
-            chatName: user.username,
-            avatar: Icons.person,
-            isGroup: false,
-          ),
+  void _openProfile(BuildContext context, UserResponse user,
+      {bool jumpToMessage = false}) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => Scaffold(
+        appBar: AppBar(
+          backgroundColor: Colors.pinkAccent,
+          foregroundColor: Colors.white,
+          title: Text(user.username),
+          elevation: 0,
         ),
-      );
-    } catch (error) {
-      if (context.mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not open chat: $error')),
-        );
-      }
-    } finally {
-      _openingConversation = false;
-    }
+        body: UserProfileScreen.visitor(user: user),
+      ),
+    ));
   }
 }
 
+// ── Individual result card ──────────────────────────────────────────────────
+class _UserSearchCard extends StatelessWidget {
+  final UserResponse user;
+  final VoidCallback onViewProfile;
+  final VoidCallback onSendMessage;
+
+  const _UserSearchCard({
+    required this.user,
+    required this.onViewProfile,
+    required this.onSendMessage,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasAvatar =
+        user.profileImageUrl != null && user.profileImageUrl!.isNotEmpty;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      color: Colors.pinkAccent.withValues(alpha: 0.055),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: Colors.pinkAccent.withValues(alpha: 0.12)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(children: [
+          // Avatar
+          CircleAvatar(
+            radius: 26,
+            backgroundColor: Colors.pinkAccent.withValues(alpha: 0.16),
+            backgroundImage:
+                hasAvatar ? NetworkImage(user.profileImageUrl!) : null,
+            child: hasAvatar
+                ? null
+                : Text(
+                    user.username.isNotEmpty
+                        ? user.username[0].toUpperCase()
+                        : '?',
+                    style: const TextStyle(
+                        color: Colors.pinkAccent,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 18),
+                  ),
+          ),
+          const SizedBox(width: 14),
+
+          // Name + email
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(user.username,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w700, fontSize: 15)),
+                const SizedBox(height: 2),
+                Text(user.email,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+
+          // Action buttons
+          _ActionButton(
+            icon: Icons.person_outline_rounded,
+            label: 'Profile',
+            onTap: onViewProfile,
+          ),
+          const SizedBox(width: 8),
+          _ActionButton(
+            icon: Icons.send_rounded,
+            label: 'Message',
+            filled: true,
+            onTap: onSendMessage,
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool filled;
+  final VoidCallback onTap;
+
+  const _ActionButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.filled = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (filled) {
+      return FilledButton.icon(
+        style: FilledButton.styleFrom(
+          backgroundColor: Colors.pinkAccent,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        onPressed: onTap,
+        icon: Icon(icon, size: 16),
+        label: Text(label, style: const TextStyle(fontSize: 12)),
+      );
+    }
+    return OutlinedButton.icon(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.pinkAccent,
+        side: const BorderSide(color: Colors.pinkAccent),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      onPressed: onTap,
+      icon: Icon(icon, size: 16),
+      label: Text(label, style: const TextStyle(fontSize: 12)),
+    );
+  }
+}
+
+// ── Empty / error state ─────────────────────────────────────────────────────
 class _SearchState extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -263,12 +332,17 @@ class _SearchState extends StatelessWidget {
             children: [
               Icon(icon, size: 42, color: Colors.pinkAccent),
               const SizedBox(height: 12),
-              Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+              Text(title,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w700, fontSize: 16)),
               const SizedBox(height: 6),
               Text(message, textAlign: TextAlign.center),
               if (onRetry != null) ...[
                 const SizedBox(height: 8),
-                TextButton.icon(onPressed: onRetry, icon: const Icon(Icons.refresh), label: const Text('Try again')),
+                TextButton.icon(
+                    onPressed: onRetry,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Try again')),
               ],
             ],
           ),
