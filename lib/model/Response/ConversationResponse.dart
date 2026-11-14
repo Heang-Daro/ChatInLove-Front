@@ -39,8 +39,8 @@ class ConversationResponse {
           : ConversationType.GROUP,
       name: json['name'],
       description: json['description'],
-      createdAt: json['createdAt'] != null ? DateTime.parse(json['createdAt']) : null,
-      lastMessageAt: json['lastMessageAt'] != null ? DateTime.parse(json['lastMessageAt']) : null,
+      createdAt: json['createdAt'] != null ? DateTime.parse(json['createdAt']).toUtc() : null,
+      lastMessageAt: json['lastMessageAt'] != null ? DateTime.parse(json['lastMessageAt']).toUtc() : null,
       members: json['members'] != null
           ? (json['members'] as List)
               .map((e) => ConversationMemberResponse.fromJson(e))

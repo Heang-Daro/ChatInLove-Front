@@ -20,8 +20,8 @@ class ConversationMemberResponse {
       userId: json['userId']?.toString() ?? '',
       username: json['username']?.toString() ?? '',
       role: json['role']?.toString() ?? '',
-      joinedAt: json['joinedAt'] != null ? DateTime.parse(json['joinedAt']) : null,
-      leftAt: json['leftAt'] != null ? DateTime.parse(json['leftAt']) : null,
+      joinedAt: json['joinedAt'] != null ? DateTime.parse(json['joinedAt']).toUtc() : null,
+      leftAt: json['leftAt'] != null ? DateTime.parse(json['leftAt']).toUtc() : null,
       profileImageUrl: json['profileImageUrl']?.toString(),
     );
   }

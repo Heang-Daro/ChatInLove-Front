@@ -16,6 +16,29 @@ class ConversationTile extends StatelessWidget {
     required this.currentUserId,
   });
 
+  /// Formats a local DateTime into a readable time or date.
+  /// • Same day  → HH:mm  (e.g. "13:31")
+  /// • This week → Weekday (e.g. "Mon")
+  /// • Older     → dd/mm  (e.g. "12/11")
+  String _formatTime(DateTime local) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final msgDay = DateTime(local.year, local.month, local.day);
+    final diff = today.difference(msgDay).inDays;
+
+    if (diff == 0) {
+      // Same day — show HH:mm
+      return '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+    } else if (diff < 7) {
+      // Within the last week — show weekday name
+      const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      return days[local.weekday - 1];
+    } else {
+      // Older — show day/month
+      return '${local.day}/${local.month}';
+    }
+  }
+
   IconData? _getMessageIcon(MessageType type) {
     switch (type) {
       case MessageType.IMAGE:
@@ -169,7 +192,7 @@ class ConversationTile extends StatelessWidget {
         children: [
           Text(
             chat.lastMessageAt != null
-                ? "${chat.lastMessageAt!.hour}:${chat.lastMessageAt!.minute.toString().padLeft(2, '0')}"
+                ? _formatTime(chat.lastMessageAt!.toLocal())
                 : "",
             style: TextStyle(
               fontSize: 12,

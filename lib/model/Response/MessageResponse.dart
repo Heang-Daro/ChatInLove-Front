@@ -74,9 +74,9 @@ class MessageResponse {
       type: parsedType,
       content: json['content'] ?? '',
       isRead: json['isRead'] ?? false,
-      createdAt: json['createdAt'] != null ? DateTime.parse(json['createdAt']) : null,
-      editedAt: json['editedAt'] != null ? DateTime.parse(json['editedAt']) : null,
-      deletedAt: json['deletedAt'] != null ? DateTime.parse(json['deletedAt']) : null,
+      createdAt: json['createdAt'] != null ? DateTime.parse(json['createdAt']).toUtc() : null,
+      editedAt: json['editedAt'] != null ? DateTime.parse(json['editedAt']).toUtc() : null,
+      deletedAt: json['deletedAt'] != null ? DateTime.parse(json['deletedAt']).toUtc() : null,
       relatedCallId: json['relatedCallId'],
     );
   }
