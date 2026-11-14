@@ -178,26 +178,57 @@ class AuthProvider extends ChangeNotifier {
   /// Uploads a profile avatar or foreground image using the authenticated
   /// multipart API. Returns null on success, otherwise a displayable error.
   Future<String?> uploadUserImage(XFile image, {required bool foreground}) async {
+    // Use a longer timeout for file uploads (cold-start servers can be slow).
+    const uploadTimeout = Duration(seconds: 60);
     try {
       final bytes = await image.readAsBytes();
       final endpoint = foreground ? 'profile/foreground' : 'profile/image';
-      final response = await authorizedRequest((token) async {
+
+      // Build and send the multipart request directly so we can apply our own
+      // timeout — authorizedRequest's 15-second timeout is too short for uploads.
+      var token = _accessToken;
+      if (token == null) return 'Not authenticated. Please log in again.';
+      if (_isExpired(token)) {
+        if (!await refreshAccessToken()) return 'Session expired. Please log in again.';
+        token = _accessToken!;
+      }
+
+      Future<http.Response> doUpload(String tkn) async {
         final request = http.MultipartRequest('POST', Uri.parse('$baseUrl/$endpoint'));
-        request.headers['Authorization'] = 'Bearer $token';
+        request.headers['Authorization'] = 'Bearer $tkn';
         request.files.add(http.MultipartFile.fromBytes(
           'file', bytes,
           filename: image.name.isNotEmpty ? image.name : 'profile-image.jpg',
         ));
-        final streamed = await request.send();
-        return http.Response.fromStream(streamed);
-      });
+        final streamed = await request.send().timeout(uploadTimeout);
+        return http.Response.fromStream(streamed).timeout(uploadTimeout);
+      }
+
+      var response = await doUpload(token);
+
+      // Transparent token refresh on 401/403.
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        if (await refreshAccessToken()) {
+          response = await doUpload(_accessToken!);
+        } else {
+          await logout();
+          return 'Session expired. Please log in again.';
+        }
+      }
+
       if (response.statusCode == 200) {
         _currentUser = UserResponse.fromJson(json.decode(response.body));
         notifyListeners();
         return null;
       }
-      return _responseMessage(response, 'Could not upload the image.');
-    } catch (error) { return _friendlyError(error); }
+      debugPrint('[uploadUserImage] HTTP ${response.statusCode}: ${response.body}');
+      return _responseMessage(response, 'Could not upload the image (HTTP ${response.statusCode}).');
+    } on TimeoutException {
+      return 'Upload timed out. The server may be starting up — please try again in a moment.';
+    } catch (error) {
+      debugPrint('[uploadUserImage] Error: $error');
+      return _friendlyError(error);
+    }
   }
 
   Future<String?> changePassword({required String currentPassword, required String newPassword}) async {
