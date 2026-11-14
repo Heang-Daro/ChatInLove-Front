@@ -4,9 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
 
+import 'package:love_in_chat/model/emun/MessageType.dart';
 import 'package:love_in_chat/provider/AuthProvider.dart';
+import 'package:love_in_chat/provider/ConversationProvider.dart';
 import 'package:love_in_chat/service/CallSignalingService.dart';
-import 'package:love_in_chat/service/StompService.dart';
 
 /// Full-screen in-call screen.
 ///
@@ -47,10 +48,43 @@ class _CallScreenState extends State<CallScreen> {
   bool _cameraOff  = false;
   bool _speakerOn  = true;
   bool _connected  = false;
-  bool _ringing    = true;   // true until remote track arrives or answer received
+  bool _ringing    = true;
+  bool _messageSent = false; // guard against double-sending
 
   Duration _elapsed = Duration.zero;
   Timer? _timer;
+
+  // ── Call summary message ─────────────────────────────────────────────────
+
+  /// Encodes the call outcome as the message content stored in the DB.
+  /// Format: "AUDIO:mm:ss" | "VIDEO:mm:ss" | "AUDIO:MISSED" etc.
+  String _callContent(String outcome) {
+    final kind = widget.isVideo ? 'VIDEO' : 'AUDIO';
+    return '$kind:$outcome';
+  }
+
+  String get _durationLabel {
+    final m = _elapsed.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = _elapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  Future<void> _sendCallMessage(String outcome) async {
+    if (_messageSent) return;
+    _messageSent = true;
+    try {
+      final auth = context.read<AuthProvider>();
+      final convos = context.read<ConversationProvider>();
+      await convos.sendMessage(
+        auth,
+        widget.conversationId,
+        _callContent(outcome),
+        type: MessageType.CALL,
+      );
+    } catch (e) {
+      debugPrint('[CallScreen] could not send call message: $e');
+    }
+  }
 
   @override
   void initState() {
@@ -77,7 +111,18 @@ class _CallScreenState extends State<CallScreen> {
       setState(() => _localRenderer.srcObject = stream);
     });
 
-    _endedSub = sig.onCallEnded.stream.listen((_) => _leave());
+    _endedSub = sig.onCallEnded.stream.listen((type) async {
+      // Remote side ended the call.
+      if (_connected) {
+        await _sendCallMessage(_durationLabel);
+      } else {
+        // We were ringing when the remote cancelled or declined.
+        await _sendCallMessage(
+          type == SignalType.callReject ? 'REJECTED' : 'MISSED',
+        );
+      }
+      _leave();
+    });
 
     if (widget.incomingOffer != null) {
       // Callee: answer the incoming offer.
@@ -106,7 +151,10 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _hangup() async {
+    // Determine outcome before tearing down.
+    final outcome = _connected ? _durationLabel : 'CANCELLED';
     await widget.signalingService.hangup();
+    await _sendCallMessage(outcome);
     _leave();
   }
 

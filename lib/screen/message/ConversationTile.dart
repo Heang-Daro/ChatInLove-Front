@@ -39,6 +39,20 @@ class ConversationTile extends StatelessWidget {
     }
   }
 
+  /// Readable label for a CALL message shown in the conversation list.
+  String _callLabel(String content) {
+    final parts = content.split(':');
+    final kind = parts.isNotEmpty ? parts[0].toUpperCase() : 'AUDIO';
+    final rest = parts.length > 1 ? parts.sublist(1).join(':') : '';
+    final isVideo = kind == 'VIDEO';
+    switch (rest) {
+      case 'MISSED':    return isVideo ? '📹 Missed video call' : '📞 Missed call';
+      case 'REJECTED':  return isVideo ? '📹 Declined video call' : '📞 Declined call';
+      case 'CANCELLED': return isVideo ? '📹 Cancelled video call' : '📞 Cancelled call';
+      default:          return isVideo ? '📹 Video call · $rest' : '📞 Voice call · $rest';
+    }
+  }
+
   IconData? _getMessageIcon(MessageType type) {
     switch (type) {
       case MessageType.IMAGE:
@@ -50,7 +64,7 @@ class ConversationTile extends StatelessWidget {
       case MessageType.FILE:
         return Icons.insert_drive_file;
       case MessageType.CALL:
-        return Icons.phone;
+        return null; // emoji icon is embedded in the label text
       case MessageType.SYSTEM:
         return Icons.info_outline;
       case MessageType.TEXT:
@@ -70,7 +84,7 @@ class ConversationTile extends StatelessWidget {
       case MessageType.FILE:
         return "Document";
       case MessageType.CALL:
-        return "Call";
+        return _callLabel(lastMsg.content);
       case MessageType.SYSTEM:
         return lastMsg.content;
       case MessageType.TEXT:

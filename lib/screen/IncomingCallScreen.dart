@@ -1,4 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import 'package:love_in_chat/model/emun/MessageType.dart';
+import 'package:love_in_chat/provider/AuthProvider.dart';
+import 'package:love_in_chat/provider/ConversationProvider.dart';
 import 'package:love_in_chat/service/CallSignalingService.dart';
 import 'CallScreen.dart';
 
@@ -62,9 +67,22 @@ class IncomingCallScreen extends StatelessWidget {
                     icon: Icons.call_end,
                     label: 'Decline',
                     color: Colors.redAccent,
-                    onTap: () {
+                    onTap: () async {
                       signalingService.rejectCall(offer);
-                      Navigator.of(context).pop();
+                      // Send a "missed call" message into the conversation.
+                      final convId = offer['conversationId']?.toString() ?? '';
+                      if (convId.isNotEmpty) {
+                        try {
+                          final auth = context.read<AuthProvider>();
+                          final convos = context.read<ConversationProvider>();
+                          final kind = _isVideo ? 'VIDEO' : 'AUDIO';
+                          await convos.sendMessage(
+                            auth, convId, '$kind:MISSED',
+                            type: MessageType.CALL,
+                          );
+                        } catch (_) {}
+                      }
+                      if (context.mounted) Navigator.of(context).pop();
                     },
                   ),
                   // Accept

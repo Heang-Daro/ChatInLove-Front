@@ -214,20 +214,7 @@ class ConversationBody extends StatelessWidget {
         );
 
       case MessageType.CALL:
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.phone, color: isMe ? Colors.white : Colors.pinkAccent, size: 18),
-            const SizedBox(width: 8),
-            Text(
-              "Call Message",
-              style: TextStyle(
-                color: isMe ? Colors.white : Theme.of(context).textTheme.bodyLarge?.color,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        );
+        return _CallBubble(content: message.content, isMe: isMe);
 
       case MessageType.SYSTEM:
         return Center(
@@ -376,6 +363,92 @@ class ConversationBody extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+// ── Call bubble ──────────────────────────────────────────────────────────────
+/// Parses the CALL message content and renders an icon + label.
+///
+/// Content format (written by CallScreen / IncomingCallScreen):
+///   "AUDIO:02:34"   → voice call, connected, 2 min 34 sec
+///   "VIDEO:05:01"   → video call, connected, 5 min 1 sec
+///   "AUDIO:MISSED"  → missed voice call
+///   "VIDEO:MISSED"  → missed video call
+///   "AUDIO:REJECTED"→ declined voice call
+///   "VIDEO:REJECTED"→ declined video call
+///   "AUDIO:CANCELLED"→ caller cancelled before answer
+///   "VIDEO:CANCELLED"→ caller cancelled before answer
+class _CallBubble extends StatelessWidget {
+  final String content;
+  final bool isMe;
+
+  const _CallBubble({required this.content, required this.isMe});
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = content.split(':');
+    final kind = parts.isNotEmpty ? parts[0].toUpperCase() : 'AUDIO';
+    // duration is everything after the kind prefix (handles mm:ss with colons)
+    final rest = parts.length > 1 ? parts.sublist(1).join(':') : '';
+
+    final isVideo  = kind == 'VIDEO';
+    final isMissed = rest == 'MISSED';
+    final isDeclined   = rest == 'REJECTED';
+    final isCancelled  = rest == 'CANCELLED';
+    final notConnected = isMissed || isDeclined || isCancelled;
+
+    final Color fgColor = isMe ? Colors.white : Colors.pinkAccent;
+    final Color dimColor = isMe
+        ? Colors.white70
+        : Theme.of(context).colorScheme.onSurfaceVariant;
+
+    IconData icon;
+    String label;
+
+    if (notConnected) {
+      icon  = Icons.phone_missed;
+      label = isMissed
+          ? (isVideo ? 'Missed video call' : 'Missed voice call')
+          : isDeclined
+              ? (isVideo ? 'Declined video call' : 'Declined voice call')
+              : (isVideo ? 'Cancelled video call' : 'Cancelled voice call');
+    } else {
+      icon  = isVideo ? Icons.videocam_rounded : Icons.call_rounded;
+      label = isVideo ? 'Video call' : 'Voice call';
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          icon,
+          size: 20,
+          color: notConnected ? Colors.redAccent.withValues(alpha: isMe ? 0.9 : 1.0) : fgColor,
+        ),
+        const SizedBox(width: 8),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: fgColor,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+            if (!notConnected && rest.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(
+                rest,
+                style: TextStyle(fontSize: 11, color: dimColor),
+              ),
+            ],
+          ],
+        ),
+      ],
     );
   }
 }
