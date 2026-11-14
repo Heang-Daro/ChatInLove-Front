@@ -7,8 +7,6 @@ import 'package:http_parser/http_parser.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-typedef ConversationProviderResetter = void Function();
-
 import 'package:love_in_chat/api/api.dart';
 import 'package:love_in_chat/model/Request/LoginRequest.dart';
 import 'package:love_in_chat/model/Request/RegisterRequest.dart';
@@ -17,6 +15,8 @@ import '../model/Response/UserResponse.dart';
 import '../service/AccountManager.dart';
 import '../service/CacheService.dart';
 import '../service/DeviceLocationService.dart';
+
+typedef ConversationProviderResetter = void Function();
 
 class AuthProvider extends ChangeNotifier {
   final String baseUrl = "${REST_URL}/api/auth";
