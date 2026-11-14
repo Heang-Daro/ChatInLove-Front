@@ -146,20 +146,35 @@ class AuthProvider extends ChangeNotifier {
 
   Future<http.Response> authorizedRequest(Future<http.Response> Function(String token) send) async {
     var token = _accessToken;
-    if (token == null) { await logout(); throw StateError('Not authenticated'); }
+    if (token == null) {
+      // No token at all — user is not logged in. Don't logout (already logged out).
+      throw StateError('Not authenticated');
+    }
     if (_isExpired(token)) {
-      if (!await refreshAccessToken()) { await logout(); throw StateError('Session expired'); }
+      final refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        // Refresh failed — session truly expired. Log out silently.
+        await logout();
+        throw StateError('Session expired');
+      }
       token = _accessToken!;
     }
     var response = await send(token).timeout(_timeout);
-    // Only 401 (token expired/invalid) triggers a refresh+retry.
-    // 403 is a resource-level permission denial (e.g. PENDING conversation) —
-    // it must be returned to the caller, NOT treated as a session error.
+    // 401 = token rejected by server (e.g. revoked session). Try one refresh.
+    // 403 = resource-level permission denial — return as-is to the caller.
     if (response.statusCode == 401) {
-      if (await refreshAccessToken()) {
+      final refreshed = await refreshAccessToken();
+      if (refreshed) {
         response = await send(_accessToken!).timeout(_timeout);
-        if (response.statusCode == 401) { await logout(); throw StateError('Unauthorized access'); }
-      } else { await logout(); throw StateError('Session refresh failed'); }
+        if (response.statusCode == 401) {
+          // Still 401 after refresh — session is invalid. Log out.
+          await logout();
+          throw StateError('Unauthorized access');
+        }
+      } else {
+        await logout();
+        throw StateError('Session refresh failed');
+      }
     }
     return response;
   }
@@ -254,7 +269,7 @@ class AuthProvider extends ChangeNotifier {
 
   String _friendlyError(Object error) {
     if (error is TimeoutException) return 'Request timed out. Please try again.';
-    if (error is StateError) return error.message;
+    if (error is StateError) return error.message; // e.g. 'Session expired', 'Not authenticated'
     return 'Connection error. Please try again.';
   }
 
