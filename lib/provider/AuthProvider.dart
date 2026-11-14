@@ -34,31 +34,24 @@ class AuthProvider extends ChangeNotifier {
 
   String? get accessToken => _accessToken;
   bool get isLoading => _isLoading;
-  bool get isInitialized => _isInitialized; // show a splash until true
+  bool get isInitialized => _isInitialized;
   String? get errorMessage => _errorMessage;
   bool get isAuthenticated => _accessToken != null;
 
-  // Single, robust getter for currentUserId using the JWT payload
   String? get currentUserId {
     final payload = _jwtPayload;
     if (payload == null) return null;
-
-    // Return 'sub', 'userId', or 'id' depending on what your Spring Security JWT contains
     final value = payload['sub'] ?? payload['userId'] ?? payload['id'];
     return value is String ? value : value?.toString();
   }
 
-  /// Device session id (`sid` claim) of the token the app is using right now.
-  /// Used by the Device Security screen to highlight the current device.
   String? get currentSessionId {
     final payload = _jwtPayload;
     if (payload == null) return null;
-
     final value = payload['sid'] ?? payload['sessionId'];
     return value is String ? value : value?.toString();
   }
 
-  /// Decoded JWT payload of the current access token, or null.
   Map<String, dynamic>? get _jwtPayload {
     final token = _accessToken;
     if (token == null) return null;
@@ -77,16 +70,12 @@ class AuthProvider extends ChangeNotifier {
     _init();
   }
 
-  // ---------------------------------------------------------------------------
-  // Startup: load saved tokens, refresh if expired, and fetch user profile
-  // ---------------------------------------------------------------------------
   Future<void> _init() async {
     final prefs = await SharedPreferences.getInstance();
     _accessToken = prefs.getString(_accessKey);
     _refreshToken = prefs.getString(_refreshKey);
 
-    final needsRefresh =
-        _accessToken == null || _isExpired(_accessToken!);
+    final needsRefresh = _accessToken == null || _isExpired(_accessToken!);
     if (needsRefresh) {
       if (_refreshToken != null) {
         final success = await refreshAccessToken();
@@ -97,7 +86,6 @@ class AuthProvider extends ChangeNotifier {
         await logout();
       }
     } else if (_accessToken != null) {
-      // Fetch user profile on successful startup if token is valid
       await _fetchUserProfile(_accessToken!);
     }
 
@@ -105,9 +93,6 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ---------------------------------------------------------------------------
-  // Fetch User Principal Profile
-  // ---------------------------------------------------------------------------
   Future<void> _fetchUserProfile(String token) async {
     try {
       final response = await http.get(
@@ -123,15 +108,10 @@ class AuthProvider extends ChangeNotifier {
         notifyListeners();
       }
     } catch (_) {
-      // Fail silently or handle network error for profile fetch
+      // Profile loading should not prevent the app from opening.
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // JWT helpers
-  // ---------------------------------------------------------------------------
-  /// True if the JWT's `exp` is in the past (30s leeway). If the token can't be
-  /// parsed, returns false and lets the server decide.
   bool _isExpired(String token) {
     try {
       final parts = token.split('.');
@@ -141,18 +121,13 @@ class AuthProvider extends ChangeNotifier {
       ) as Map<String, dynamic>;
       final exp = payload['exp'];
       if (exp is! num) return false;
-      final expiry =
-      DateTime.fromMillisecondsSinceEpoch(exp.toInt() * 1000);
-      return DateTime.now()
-          .isAfter(expiry.subtract(const Duration(seconds: 30)));
+      final expiry = DateTime.fromMillisecondsSinceEpoch(exp.toInt() * 1000);
+      return DateTime.now().isAfter(expiry.subtract(const Duration(seconds: 30)));
     } catch (_) {
       return false;
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Token storage
-  // ---------------------------------------------------------------------------
   Future<void> _saveTokens(String access, String? refresh) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_accessKey, access);
@@ -164,14 +139,9 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ---------------------------------------------------------------------------
-  // Refresh
-  // ---------------------------------------------------------------------------
-  /// Returns true if a new access token is now available.
   Future<bool> refreshAccessToken() {
     final inFlight = _refreshing;
     if (inFlight != null) return inFlight.future;
-
     final completer = _refreshing = Completer<bool>();
     _doRefresh().then(completer.complete).whenComplete(() => _refreshing = null);
     return completer.future;
@@ -179,19 +149,16 @@ class AuthProvider extends ChangeNotifier {
 
   Future<bool> _doRefresh() async {
     final rt = _refreshToken;
-    // Check if rt is null OR empty
     if (rt == null || rt.trim().isEmpty) {
       await logout();
       return false;
     }
     try {
-      final response = await http
-          .post(
+      final response = await http.post(
         Uri.parse('$baseUrl/refresh'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'refreshToken': rt}),
-      )
-          .timeout(_timeout);
+      ).timeout(_timeout);
 
       if (response.statusCode == 200) {
         final auth = AuthResponse.fromJson(json.decode(response.body));
@@ -208,20 +175,15 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Authorized request wrapper: refresh before/after expiry, retry once,
-  // log out if the session can't be recovered.
-  // ---------------------------------------------------------------------------
   Future<http.Response> authorizedRequest(
-      Future<http.Response> Function(String token) send,
-      ) async {
+    Future<http.Response> Function(String token) send,
+  ) async {
     var token = _accessToken;
     if (token == null) {
       await logout();
       throw StateError('Not authenticated');
     }
 
-    // Proactive check if expired locally using JWT 'exp' claim
     if (_isExpired(token)) {
       if (!await refreshAccessToken()) {
         await logout();
@@ -231,12 +193,9 @@ class AuthProvider extends ChangeNotifier {
     }
 
     var response = await send(token).timeout(_timeout);
-
-    // If backend rejects with 401/403, attempt a reactive token refresh once
     if (response.statusCode == 401 || response.statusCode == 403) {
       if (await refreshAccessToken()) {
         response = await send(_accessToken!).timeout(_timeout);
-        // If it still fails with 401/403 after refreshing, terminate session
         if (response.statusCode == 401 || response.statusCode == 403) {
           await logout();
           throw StateError('Unauthorized access');
@@ -246,23 +205,84 @@ class AuthProvider extends ChangeNotifier {
         throw StateError('Session refresh failed');
       }
     }
-
     return response;
   }
 
-  // ---------------------------------------------------------------------------
-  // Login / Register / Logout
-  // ---------------------------------------------------------------------------
+  /// Updates the signed-in user's username and email via PUT /api/auth/profile.
+  /// Returns null on success, otherwise a user-friendly error message.
+  Future<String?> updateProfile({required String username, required String email}) async {
+    try {
+      final response = await authorizedRequest((token) => http.put(
+            Uri.parse('$baseUrl/profile'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: json.encode({'username': username.trim(), 'email': email.trim()}),
+          ));
+
+      if (response.statusCode == 200) {
+        _currentUser = UserResponse.fromJson(json.decode(response.body));
+        notifyListeners();
+        return null;
+      }
+      return _responseMessage(response, 'Could not update your profile.');
+    } catch (error) {
+      return _friendlyError(error);
+    }
+  }
+
+  /// Changes the signed-in user's password via PUT /api/auth/change-password.
+  /// Returns null on success, otherwise a user-friendly error message.
+  Future<String?> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    try {
+      final response = await authorizedRequest((token) => http.put(
+            Uri.parse('$baseUrl/change-password'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: json.encode({
+              'currentPassword': currentPassword,
+              'newPassword': newPassword,
+            }),
+          ));
+
+      if (response.statusCode == 204 || response.statusCode == 200) return null;
+      return _responseMessage(response, 'Could not change your password.');
+    } catch (error) {
+      return _friendlyError(error);
+    }
+  }
+
+  String _responseMessage(http.Response response, String fallback) {
+    try {
+      final body = json.decode(response.body);
+      if (body is Map<String, dynamic> && body['message'] is String) {
+        return body['message'] as String;
+      }
+    } catch (_) {
+      // Use fallback for non-JSON error responses.
+    }
+    return fallback;
+  }
+
+  String _friendlyError(Object error) {
+    if (error is TimeoutException) return 'Request timed out. Please try again.';
+    if (error is StateError) return error.message;
+    return 'Connection error. Please try again.';
+  }
+
   Future<bool> login(String email, String password) async {
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
 
     try {
-      // The device profile (name, type and the location the user allowed)
-      // travels with the login so the session list can show it right away.
       final profile = await DeviceLocationService.currentProfile();
-
       final request = LoginRequest(
         email: email,
         password: password,
@@ -270,34 +290,25 @@ class AuthProvider extends ChangeNotifier {
         deviceName: profile.deviceName,
         deviceType: profile.deviceType,
       );
-
-      final response = await http
-          .post(
+      final response = await http.post(
         Uri.parse('$baseUrl/login'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(request.toJson()),
-      )
-          .timeout(_timeout);
+      ).timeout(_timeout);
 
       if (response.statusCode == 200) {
         final auth = AuthResponse.fromJson(json.decode(response.body));
-
-        // 1. Save tokens
         await _saveTokens(auth.accessToken, auth.refreshToken);
-
-        // 2. Fetch user profile from /principal endpoint using the new token
         await _fetchUserProfile(auth.accessToken);
-
         _isLoading = false;
         notifyListeners();
         return true;
-      } else {
-        _errorMessage = "Invalid email or password";
       }
+      _errorMessage = 'Invalid email or password';
     } on TimeoutException {
-      _errorMessage = "Connection timed out. Please try again.";
+      _errorMessage = 'Connection timed out. Please try again.';
     } catch (e) {
-      _errorMessage = "Network error: $e";
+      _errorMessage = 'Network error: $e';
     }
 
     _isLoading = false;
@@ -311,35 +322,26 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final request =
-      RegisterRequest(email: email, username: username, password: password);
-      final response = await http
-          .post(
+      final request = RegisterRequest(email: email, username: username, password: password);
+      final response = await http.post(
         Uri.parse('$baseUrl/register'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode(request.toJson()),
-      )
-          .timeout(_timeout);
+      ).timeout(_timeout);
 
       if (response.statusCode == 201 || response.statusCode == 200) {
         final auth = AuthResponse.fromJson(json.decode(response.body));
-
-        // 1. Save tokens
         await _saveTokens(auth.accessToken, auth.refreshToken);
-
-        // 2. Fetch user profile from /principal endpoint
         await _fetchUserProfile(auth.accessToken);
-
         _isLoading = false;
         notifyListeners();
         return true;
-      } else {
-        _errorMessage = "Registration failed";
       }
+      _errorMessage = 'Registration failed';
     } on TimeoutException {
-      _errorMessage = "Connection timed out. Please try again.";
+      _errorMessage = 'Connection timed out. Please try again.';
     } catch (e) {
-      _errorMessage = "Network error: $e";
+      _errorMessage = 'Network error: $e';
     }
 
     _isLoading = false;
@@ -347,32 +349,21 @@ class AuthProvider extends ChangeNotifier {
     return false;
   }
 
-  /// Sends the device name, the device type and the location of the device to
-  /// the backend for the session that is currently used.
-  ///
-  /// This is called when the app is opened, so the "Device Security" screen
-  /// always shows an up to date position of every device. Failures are
-  /// ignored: the app works without a position.
+  /// Syncs device name, type, and location for the currently authenticated session.
   Future<bool> syncCurrentDevice({bool askPermission = true}) async {
     final token = _accessToken;
     if (token == null || token.isEmpty) return false;
 
     try {
-      final profile = await DeviceLocationService.currentProfile(
-        askPermission: askPermission,
-      );
-
-      final response = await http
-          .put(
-            Uri.parse('$baseUrl/devices/current'),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-            body: json.encode(profile.toJson()),
-          )
-          .timeout(_timeout);
-
+      final profile = await DeviceLocationService.currentProfile(askPermission: askPermission);
+      final response = await http.put(
+        Uri.parse('$baseUrl/devices/current'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode(profile.toJson()),
+      ).timeout(_timeout);
       return response.statusCode >= 200 && response.statusCode < 300;
     } catch (e) {
       debugPrint('AuthProvider: could not sync the device: $e');
@@ -381,23 +372,16 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> logout() async {
-    // Remember the account id before the token is dropped, the local chat
-    // cache of that account is removed as well.
     final userId = currentUserId;
-
-    // Best effort: revoke this device session on the server (POST /api/auth/logout).
-    // Failures are ignored so signing out always works offline too.
     final token = _accessToken;
     if (token != null && token.isNotEmpty) {
       try {
-        await http
-            .post(
-              Uri.parse('$baseUrl/logout'),
-              headers: {'Authorization': 'Bearer $token'},
-            )
-            .timeout(const Duration(seconds: 5));
+        await http.post(
+          Uri.parse('$baseUrl/logout'),
+          headers: {'Authorization': 'Bearer $token'},
+        ).timeout(const Duration(seconds: 5));
       } catch (_) {
-        // Ignore: local sign-out must never be blocked by the network.
+        // Local sign-out must still work when offline.
       }
     }
 
@@ -407,10 +391,9 @@ class AuthProvider extends ChangeNotifier {
     _accessToken = null;
     _refreshToken = null;
     _currentUser = null;
-    // Drop the cached chats of this account so the next user starts clean.
     if (userId != null && userId.isNotEmpty) {
       await CacheService.clearUser(userId);
     }
-    notifyListeners(); // UI watching isAuthenticated switches to the login page
+    notifyListeners();
   }
 }
