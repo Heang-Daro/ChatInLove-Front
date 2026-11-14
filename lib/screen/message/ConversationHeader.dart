@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
 import '../../screen/CallScreen.dart';
+import '../../screen/GroupCallScreen.dart';
 import 'ConversationDetailPage.dart';
 
 class ConversationHeader extends StatelessWidget implements PreferredSizeWidget {
@@ -73,15 +74,15 @@ class ConversationHeader extends StatelessWidget implements PreferredSizeWidget 
         ),
         // Audio call button
         IconButton(
-          tooltip: 'Voice call',
+          tooltip: isGroup ? 'Group voice call' : 'Voice call',
           icon: const Icon(Icons.call, color: Colors.white),
-          onPressed: isGroup ? null : () => _startCall(context, video: false),
+          onPressed: () => _startCall(context, video: false),
         ),
         // Video call button
         IconButton(
-          tooltip: 'Video call',
+          tooltip: isGroup ? 'Group video call' : 'Video call',
           icon: const Icon(Icons.videocam_outlined, color: Colors.white),
-          onPressed: isGroup ? null : () => _startCall(context, video: true),
+          onPressed: () => _startCall(context, video: true),
         ),
         const SizedBox(width: 4),
       ],
@@ -93,26 +94,39 @@ class ConversationHeader extends StatelessWidget implements PreferredSizeWidget 
     final convos = context.read<ConversationProvider>();
     final currentUserId = auth.currentUserId ?? '';
 
-    // Find the other member's userId in a private conversation.
     final conv = convos.conversations
         .where((c) => c.id == conversationId)
         .firstOrNull;
     if (conv == null) return;
 
-    final other = conv.members
-        .where((m) => m.userId != currentUserId && m.leftAt == null)
-        .firstOrNull;
-    if (other == null) return;
+    if (isGroup) {
+      // ── Group call ───────────────────────────────────────────────────────
+      Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => GroupCallScreen(
+          conversationId: conversationId,
+          groupName:      chatName,
+          isVideo:        video,
+          members:        conv.members,
+          localUserId:    currentUserId,
+        ),
+      ));
+    } else {
+      // ── 1-to-1 call ──────────────────────────────────────────────────────
+      final other = conv.members
+          .where((m) => m.userId != currentUserId && m.leftAt == null)
+          .firstOrNull;
+      if (other == null) return;
 
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => CallScreen(
-        remoteUserId:     other.userId,
-        remoteName:       other.username,
-        conversationId:   conversationId,
-        isVideo:          video,
-        signalingService: convos.callSignaling,
-      ),
-    ));
+      Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => CallScreen(
+          remoteUserId:     other.userId,
+          remoteName:       other.username,
+          conversationId:   conversationId,
+          isVideo:          video,
+          signalingService: convos.callSignaling,
+        ),
+      ));
+    }
   }
 
   @override

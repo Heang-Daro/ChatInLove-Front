@@ -11,6 +11,7 @@ import '../util/AppBarStyle.dart';
 import 'ChatRequestScreen.dart';
 import 'ChatSearchDelegate.dart';
 import 'CreateGroupScreen.dart';
+import 'GroupCallScreen.dart';
 import 'IncomingCallScreen.dart';
 import 'ProfileScreen.dart';
 import 'setting_util/SettingScreen.dart';
@@ -71,24 +72,44 @@ class _HomeScreenState extends State<HomeScreen> {
       conversationProvider.onIncomingCall = (offer) {
         if (!mounted) return;
         final fromId = offer['fromUserId']?.toString() ?? '';
-        // Try to resolve the caller's name from the conversation member list.
-        String callerName = fromId;
-        for (final c in conversationProvider.conversations) {
-          final member = c.members
-              .where((m) => m.userId == fromId)
+        final isGroup = offer['isGroup'] == true;
+
+        if (isGroup) {
+          // ── Incoming group call ──────────────────────────────────────────
+          final convId = offer['conversationId']?.toString() ?? '';
+          final conv = conversationProvider.conversations
+              .where((c) => c.id == convId)
               .firstOrNull;
-          if (member != null) {
-            callerName = member.username;
-            break;
+          final members = conv?.members ?? [];
+          final localUserId = context.read<AuthProvider>().currentUserId ?? '';
+          final callType = offer['callType']?.toString().toUpperCase();
+
+          Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => GroupCallScreen(
+              conversationId: convId,
+              groupName:      conv?.name ?? 'Group call',
+              isVideo:        callType == 'VIDEO',
+              members:        members,
+              localUserId:    localUserId,
+            ),
+          ));
+        } else {
+          // ── Incoming 1-to-1 call ─────────────────────────────────────────
+          String callerName = fromId;
+          for (final c in conversationProvider.conversations) {
+            final member = c.members
+                .where((m) => m.userId == fromId)
+                .firstOrNull;
+            if (member != null) { callerName = member.username; break; }
           }
+          Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => IncomingCallScreen(
+              offer: offer,
+              callerName: callerName,
+              signalingService: conversationProvider.callSignaling,
+            ),
+          ));
         }
-        Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => IncomingCallScreen(
-            offer: offer,
-            callerName: callerName,
-            signalingService: conversationProvider.callSignaling,
-          ),
-        ));
       };
       try {
         context.read<ChatRepository>().startListening();
