@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
@@ -10,26 +11,23 @@ import 'package:love_in_chat/provider/ConversationProvider.dart';
 import 'ConversationPage.dart';
 import 'setting_util/privacy_security_screen.dart';
 
-/// A unified profile screen that works for two modes:
-///   • [isOwner] = true  → shows edit controls (change avatar / foreground,
-///                          Privacy & Security, Log Out).
-///   • [isOwner] = false → shows visitor actions (Send Message, plus a
-///                          read-only view of the profile).
-///
-/// When [user] is null and [isOwner] is true the screen reads the current
-/// user from [AuthProvider] automatically.
+const Color _brand = Colors.pinkAccent;
+const double _bannerHeight = 190;
+const double _avatarRadius = 52;
+
+/// Unified profile screen.
+///   • [isOwner] = true  → edit controls (avatar, banner, privacy, log out)
+///   • [isOwner] = false → visitor view (read-only + Send Message)
 class UserProfileScreen extends StatefulWidget {
   final UserResponse? user;
   final bool isOwner;
 
   const UserProfileScreen({super.key, this.user, this.isOwner = false});
 
-  /// Convenience constructor for the visitor view, opened from search results.
   const UserProfileScreen.visitor({super.key, required UserResponse user})
       : user = user,
         isOwner = false;
 
-  /// Convenience constructor for the owner's own profile tab.
   const UserProfileScreen.owner({super.key})
       : user = null,
         isOwner = true;
@@ -43,63 +41,140 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   bool _uploadingProfile = false;
   bool _uploadingForeground = false;
   bool _sendingMessage = false;
+  bool _requestSent = false; // visitor: chat request already pending
 
-  // ── Owner: pick and upload an image ───────────────────────────────────────
-  Future<void> _pickAndUpload({required bool foreground}) async {
-    final image =
-        await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
-    if (image == null || !mounted) return;
-    setState(() => foreground ? _uploadingForeground = true : _uploadingProfile = true);
-    final error =
-        await context.read<AuthProvider>().uploadUserImage(image, foreground: foreground);
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  void _toast(String message, {bool error = false}) {
     if (!mounted) return;
-    setState(() => foreground ? _uploadingForeground = false : _uploadingProfile = false);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(error ??
-          (foreground ? 'Foreground image updated.' : 'Profile photo updated.')),
-      backgroundColor: error == null ? Colors.pinkAccent : Colors.redAccent,
-      behavior: SnackBarBehavior.floating,
-    ));
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        backgroundColor: error ? Colors.redAccent : _brand,
+        behavior: SnackBarBehavior.floating,
+      ));
   }
 
-  // ── Visitor: open or request a conversation ───────────────────────────────
+  // ── Owner: choose source, pick, upload ───────────────────────────────────
+  Future<ImageSource?> _chooseSource() {
+    return showModalBottomSheet<ImageSource>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            leading: const Icon(Icons.photo_library_outlined),
+            title: const Text('Choose from gallery'),
+            onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+          ),
+          ListTile(
+            leading: const Icon(Icons.photo_camera_outlined),
+            title: const Text('Take a photo'),
+            onTap: () => Navigator.pop(ctx, ImageSource.camera),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Future<void> _pickAndUpload({required bool foreground}) async {
+    if (_uploadingProfile || _uploadingForeground) return;
+
+    final source = await _chooseSource();
+    if (source == null || !mounted) return;
+
+    XFile? image;
+    try {
+      image = await _picker.pickImage(
+        source: source,
+        imageQuality: 85,
+        maxWidth: foreground ? 1600 : 1024, // keep uploads small on mobile data
+      );
+    } catch (_) {
+      _toast('Could not access ${source == ImageSource.camera ? 'the camera' : 'your photos'}. '
+          'Check app permissions in Settings.', error: true);
+      return;
+    }
+    if (image == null || !mounted) return;
+
+    setState(() =>
+        foreground ? _uploadingForeground = true : _uploadingProfile = true);
+
+    String? error;
+    try {
+      error = await context
+          .read<AuthProvider>()
+          .uploadUserImage(image, foreground: foreground);
+    } catch (_) {
+      error = 'Upload failed. Check your connection and try again.';
+    }
+
+    if (!mounted) return;
+    setState(() =>
+        foreground ? _uploadingForeground = false : _uploadingProfile = false);
+    _toast(
+      error ?? (foreground ? 'Banner updated' : 'Profile photo updated'),
+      error: error != null,
+    );
+  }
+
+  // ── Owner: confirm before logging out ────────────────────────────────────
+  Future<void> _confirmLogout() async {
+    final auth = context.read<AuthProvider>();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const Text('You will need to sign in again to see your chats.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Log out'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) await auth.logout();
+  }
+
+  // ── Visitor: open or request a conversation ──────────────────────────────
   Future<void> _sendMessage(UserResponse user) async {
-    if (_sendingMessage) return;
+    if (_sendingMessage || _requestSent) return;
     setState(() => _sendingMessage = true);
 
     final auth = context.read<AuthProvider>();
     final convos = context.read<ConversationProvider>();
 
-    final ConversationResponse? conversation =
-        await convos.createPrivateConversation(auth, user.id);
+    ConversationResponse? conversation;
+    try {
+      conversation = await convos.createPrivateConversation(auth, user.id);
+    } catch (_) {
+      conversation = null;
+    }
 
     if (!mounted) return;
     setState(() => _sendingMessage = false);
 
     if (conversation == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open this conversation. Please try again.')),
-      );
+      _toast('Could not open this chat. Check your connection and try again.',
+          error: true);
       return;
     }
 
     if (conversation.status == ConversationStatus.PENDING) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-              'Chat request sent to ${user.username}. You can chat once they accept.'),
-          backgroundColor: Colors.pinkAccent,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      setState(() => _requestSent = true);
+      _toast('Request sent to ${user.username}. You can chat once they accept.');
       return;
     }
 
-    // ACCEPTED — open the conversation directly.
-    if (!mounted) return;
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => ConversationPage(
-        conversationId: conversation.id,
+        conversationId: conversation!.id,
         chatName: user.username,
         avatar: Icons.person,
         isGroup: false,
@@ -107,6 +182,18 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     ));
   }
 
+  // ── Full-screen image viewer ─────────────────────────────────────────────
+  void _openImage(String? url, String heroTag) {
+    if (url == null || url.isEmpty) return;
+    Navigator.of(context).push(PageRouteBuilder(
+      opaque: false,
+      barrierColor: Colors.black87,
+      barrierDismissible: true,
+      pageBuilder: (_, __, ___) => _ImageViewer(url: url, heroTag: heroTag),
+    ));
+  }
+
+  // ── Build ────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     if (widget.isOwner) {
@@ -114,7 +201,8 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
         final u = auth.currentUser;
         return _buildProfile(
           context,
-          username: u?.username.isNotEmpty == true ? u!.username : 'My Profile',
+          username:
+              u?.username.isNotEmpty == true ? u!.username : 'My profile',
           email: u?.email ?? '',
           avatarUrl: u?.profileImageUrl,
           foregroundUrl: u?.foregroundImageUrl,
@@ -139,156 +227,329 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     String? avatarUrl,
     String? foregroundUrl,
   }) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
     return SingleChildScrollView(
-      padding: EdgeInsets.zero,
-      child: Column(children: [
-        // ── Foreground / banner ──────────────────────────────────────────────
-        Stack(children: [
-          ClipRRect(
-            borderRadius:
-                const BorderRadius.vertical(bottom: Radius.circular(24)),
-            child: SizedBox(
-              width: double.infinity,
-              height: 200,
-              child: foregroundUrl != null && foregroundUrl.isNotEmpty
-                  ? Image.network(foregroundUrl,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => _foregroundPlaceholder())
-                  : _foregroundPlaceholder(),
-            ),
-          ),
-          if (widget.isOwner)
-            Positioned(
-              right: 12,
-              top: 12,
-              child: IconButton.filledTonal(
-                tooltip: 'Change banner',
-                onPressed: _uploadingForeground
-                    ? null
-                    : () => _pickAndUpload(foreground: true),
-                icon: _uploadingForeground
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.wallpaper_outlined),
-              ),
-            ),
-        ]),
-
-        // ── Avatar + name ────────────────────────────────────────────────────
-        Transform.translate(
-          offset: const Offset(0, -44),
+      child: Center(
+        child: ConstrainedBox(
+          // Keeps the layout readable on tablets / web.
+          constraints: const BoxConstraints(maxWidth: 640),
           child: Column(children: [
-            Stack(alignment: Alignment.bottomRight, children: [
-              CircleAvatar(
-                radius: 52,
-                backgroundColor: Colors.white,
-                backgroundImage: avatarUrl != null && avatarUrl.isNotEmpty
-                    ? NetworkImage(avatarUrl)
-                    : null,
-                child: avatarUrl == null || avatarUrl.isEmpty
-                    ? const Icon(Icons.person, size: 56, color: Colors.pinkAccent)
-                    : null,
-              ),
-              if (widget.isOwner)
-                IconButton.filled(
-                  tooltip: 'Change photo',
-                  onPressed: _uploadingProfile
-                      ? null
-                      : () => _pickAndUpload(foreground: false),
-                  icon: _uploadingProfile
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
-                      : const Icon(Icons.camera_alt_outlined, size: 18),
+            // ── Banner + overlapping avatar (one Stack = no layout gap) ─────
+            Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.topCenter,
+              children: [
+                GestureDetector(
+                  onTap: () => _openImage(foregroundUrl, 'banner'),
+                  child: Hero(
+                    tag: 'banner',
+                    child: ClipRRect(
+                      borderRadius: const BorderRadius.vertical(
+                          bottom: Radius.circular(24)),
+                      child: SizedBox(
+                        width: double.infinity,
+                        height: _bannerHeight,
+                        child: _NetworkImage(
+                          url: foregroundUrl,
+                          fallback: const _BannerPlaceholder(),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-            ]),
-            const SizedBox(height: 10),
-            Text(username,
-                style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.pinkAccent)),
-            if (email.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(email,
-                  style: const TextStyle(fontSize: 14, color: Colors.grey)),
-            ],
-            const SizedBox(height: 16),
+                if (widget.isOwner)
+                  Positioned(
+                    right: 12,
+                    top: 12,
+                    child: SafeArea(
+                      child: IconButton.filledTonal(
+                        tooltip: 'Change banner',
+                        onPressed: _uploadingForeground
+                            ? null
+                            : () => _pickAndUpload(foreground: true),
+                        icon: _uploadingForeground
+                            ? const _Spinner(size: 20)
+                            : const Icon(Icons.wallpaper_outlined),
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  bottom: -_avatarRadius,
+                  child: _AvatarWithEdit(
+                    url: avatarUrl,
+                    isOwner: widget.isOwner,
+                    uploading: _uploadingProfile,
+                    onView: () => _openImage(avatarUrl, 'avatar'),
+                    onEdit: () => _pickAndUpload(foreground: false),
+                  ),
+                ),
+              ],
+            ),
 
-            // ── Action buttons ──────────────────────────────────────────────
+            // Space for the half of the avatar that hangs below the banner.
+            const SizedBox(height: _avatarRadius + 12),
+
+            // ── Name + email ────────────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Column(children: [
+                Text(
+                  username,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.bold, color: _brand),
+                ),
+                if (email.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    email,
+                    textAlign: TextAlign.center,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.bodyMedium
+                        ?.copyWith(color: scheme.onSurfaceVariant),
+                  ),
+                ],
+              ]),
+            ),
+            const SizedBox(height: 20),
+
+            // ── Visitor primary action ──────────────────────────────────────
             if (!widget.isOwner) ...[
               _VisitorActions(
-                user: widget.user!,
                 sending: _sendingMessage,
+                requestSent: _requestSent,
                 onSendMessage: () => _sendMessage(widget.user!),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 20),
             ],
+
+            // ── Menu / info ─────────────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+              child: widget.isOwner
+                  ? _ownerMenu(context, email)
+                  : _visitorInfo(context, email),
+            ),
           ]),
         ),
-
-        // ── Menu items ───────────────────────────────────────────────────────
-        Transform.translate(
-          offset: const Offset(0, -32),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: widget.isOwner ? _ownerMenu(context) : _visitorInfo(email),
-          ),
-        ),
-      ]),
-    );
-  }
-
-  // ── Owner menu (Privacy & Security, Log Out) ────────────────────────────
-  Widget _ownerMenu(BuildContext context) {
-    final auth = context.read<AuthProvider>();
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Column(children: [
-        ListTile(
-          leading:
-              const Icon(Icons.lock_outline, color: Colors.pinkAccent),
-          title: const Text('Privacy & Security'),
-          subtitle:
-              const Text('Edit profile information and manage your password'),
-          trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-          onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                  builder: (_) => const PrivacySecurityScreen())),
-        ),
-        const Divider(height: 1),
-        ListTile(
-          leading: const Icon(Icons.logout, color: Colors.redAccent),
-          title: const Text('Log Out',
-              style: TextStyle(color: Colors.redAccent)),
-          trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-          onTap: () async => auth.logout(),
-        ),
-      ]),
-    );
-  }
-
-  // ── Visitor info card (read-only) ───────────────────────────────────────
-  Widget _visitorInfo(String email) {
-    if (email.isEmpty) return const SizedBox.shrink();
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: ListTile(
-        leading: const Icon(Icons.email_outlined, color: Colors.pinkAccent),
-        title: const Text('Email'),
-        subtitle: Text(email),
       ),
     );
   }
 
-  Widget _foregroundPlaceholder() => Container(
+  // ── Owner menu ────────────────────────────────────────────────────────────
+  Widget _ownerMenu(BuildContext context, String email) {
+    return Column(children: [
+      Card(
+        elevation: 0,
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: Theme.of(context).dividerColor),
+        ),
+        child: ListTile(
+          leading: const Icon(Icons.lock_outline, color: _brand),
+          title: const Text('Privacy & security'),
+          subtitle: const Text('Edit your details and change your password'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const PrivacySecurityScreen()),
+          ),
+        ),
+      ),
+      const SizedBox(height: 12),
+      Card(
+        elevation: 0,
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: Theme.of(context).dividerColor),
+        ),
+        child: ListTile(
+          leading: const Icon(Icons.logout, color: Colors.redAccent),
+          title: const Text('Log out',
+              style: TextStyle(color: Colors.redAccent)),
+          onTap: _confirmLogout,
+        ),
+      ),
+    ]);
+  }
+
+  // ── Visitor info (read-only) ──────────────────────────────────────────────
+  Widget _visitorInfo(BuildContext context, String email) {
+    if (email.isEmpty) return const SizedBox.shrink();
+    return Card(
+      elevation: 0,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: Theme.of(context).dividerColor),
+      ),
+      child: ListTile(
+        leading: const Icon(Icons.email_outlined, color: _brand),
+        title: const Text('Email'),
+        subtitle: Text(email),
+        trailing: IconButton(
+          tooltip: 'Copy email',
+          icon: const Icon(Icons.copy_outlined, size: 20),
+          onPressed: () async {
+            await Clipboard.setData(ClipboardData(text: email));
+            _toast('Email copied');
+          },
+        ),
+      ),
+    );
+  }
+}
+
+// ── Avatar with optional edit button ─────────────────────────────────────────
+class _AvatarWithEdit extends StatelessWidget {
+  final String? url;
+  final bool isOwner;
+  final bool uploading;
+  final VoidCallback onView;
+  final VoidCallback onEdit;
+
+  const _AvatarWithEdit({
+    required this.url,
+    required this.isOwner,
+    required this.uploading,
+    required this.onView,
+    required this.onEdit,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final surface = Theme.of(context).colorScheme.surface;
+    return Stack(alignment: Alignment.bottomRight, children: [
+      GestureDetector(
+        onTap: onView,
+        child: Hero(
+          tag: 'avatar',
+          child: Container(
+            padding: const EdgeInsets.all(4), // ring that separates avatar from banner
+            decoration: BoxDecoration(color: surface, shape: BoxShape.circle),
+            child: ClipOval(
+              child: SizedBox(
+                width: _avatarRadius * 2,
+                height: _avatarRadius * 2,
+                child: _NetworkImage(
+                  url: url,
+                  fallback: Container(
+                    color: Colors.pinkAccent.withValues(alpha: 0.12),
+                    child: const Icon(Icons.person,
+                        size: 56, color: _brand),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+      if (isOwner)
+        Container(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: surface, width: 3),
+          ),
+          child: IconButton.filled(
+            tooltip: 'Change photo',
+            style: IconButton.styleFrom(
+              backgroundColor: _brand,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(40, 40),
+            ),
+            onPressed: uploading ? null : onEdit,
+            icon: uploading
+                ? const _Spinner(size: 18, color: Colors.white)
+                : const Icon(Icons.camera_alt_outlined, size: 18),
+          ),
+        ),
+    ]);
+  }
+}
+
+// ── Visitor action ───────────────────────────────────────────────────────────
+class _VisitorActions extends StatelessWidget {
+  final bool sending;
+  final bool requestSent;
+  final VoidCallback onSendMessage;
+
+  const _VisitorActions({
+    required this.sending,
+    required this.requestSent,
+    required this.onSendMessage,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final shape =
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(14));
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: SizedBox(
+        width: double.infinity,
+        height: 48,
+        child: requestSent
+            ? OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(shape: shape),
+                onPressed: null,
+                icon: const Icon(Icons.hourglass_top_rounded, size: 18),
+                label: const Text('Request sent'),
+              )
+            : FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: _brand,
+                  foregroundColor: Colors.white,
+                  shape: shape,
+                ),
+                onPressed: sending ? null : onSendMessage,
+                icon: sending
+                    ? const _Spinner(size: 18, color: Colors.white)
+                    : const Icon(Icons.chat_bubble_outline_rounded, size: 18),
+                label: Text(sending ? 'Opening chat…' : 'Send message'),
+              ),
+      ),
+    );
+  }
+}
+
+// ── Network image with loading + error states ────────────────────────────────
+class _NetworkImage extends StatelessWidget {
+  final String? url;
+  final Widget fallback;
+
+  const _NetworkImage({required this.url, required this.fallback});
+
+  @override
+  Widget build(BuildContext context) {
+    if (url == null || url!.isEmpty) return fallback;
+    return Image.network(
+      url!,
+      fit: BoxFit.cover,
+      gaplessPlayback: true, // no flicker when the image URL changes
+      loadingBuilder: (context, child, progress) {
+        if (progress == null) return child;
+        return Stack(fit: StackFit.expand, children: [
+          fallback,
+          const Center(child: _Spinner(size: 24)),
+        ]);
+      },
+      errorBuilder: (_, __, ___) => fallback,
+    );
+  }
+}
+
+class _BannerPlaceholder extends StatelessWidget {
+  const _BannerPlaceholder();
+
+  @override
+  Widget build(BuildContext context) => Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [
@@ -299,49 +560,58 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             end: Alignment.bottomRight,
           ),
         ),
-        alignment: Alignment.center,
-        child: const Icon(Icons.photo_outlined, size: 48, color: Colors.pinkAccent),
       );
 }
 
-// ── Visitor action buttons ──────────────────────────────────────────────────
-class _VisitorActions extends StatelessWidget {
-  final UserResponse user;
-  final bool sending;
-  final VoidCallback onSendMessage;
+class _Spinner extends StatelessWidget {
+  final double size;
+  final Color? color;
+  const _Spinner({required this.size, this.color});
 
-  const _VisitorActions({
-    required this.user,
-    required this.sending,
-    required this.onSendMessage,
-  });
+  @override
+  Widget build(BuildContext context) => SizedBox(
+        width: size,
+        height: size,
+        child: CircularProgressIndicator(strokeWidth: 2, color: color),
+      );
+}
+
+// ── Full-screen, pinch-to-zoom viewer ────────────────────────────────────────
+class _ImageViewer extends StatelessWidget {
+  final String url;
+  final String heroTag;
+  const _ImageViewer({required this.url, required this.heroTag});
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Row(children: [
-        // Send Message button
-        Expanded(
-          child: FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: Colors.pinkAccent,
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14)),
+    return GestureDetector(
+      onTap: () => Navigator.pop(context),
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Stack(children: [
+          Center(
+            child: Hero(
+              tag: heroTag,
+              child: InteractiveViewer(
+                minScale: 1,
+                maxScale: 4,
+                child: Image.network(url, fit: BoxFit.contain),
+              ),
             ),
-            onPressed: sending ? null : onSendMessage,
-            icon: sending
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.send_rounded, size: 18),
-            label: Text(sending ? 'Opening…' : 'Send Message'),
           ),
-        ),
-      ]),
+          SafeArea(
+            child: Align(
+              alignment: Alignment.topRight,
+              child: IconButton(
+                tooltip: 'Close',
+                color: Colors.white,
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ),
+          ),
+        ]),
+      ),
     );
   }
 }
