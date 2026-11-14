@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -202,6 +203,10 @@ class AuthProvider extends ChangeNotifier {
       final bytes = await image.readAsBytes();
       final endpoint = foreground ? 'profile/foreground' : 'profile/image';
 
+      // Resolve MIME type from the file so the backend content-type validation passes.
+      // XFile.mimeType is available on mobile; fall back to extension detection.
+      String mimeType = image.mimeType ?? _mimeFromExtension(image.name);
+
       // Build and send the multipart request directly so we can apply our own
       // timeout — authorizedRequest's 15-second timeout is too short for uploads.
       var token = _accessToken;
@@ -217,6 +222,7 @@ class AuthProvider extends ChangeNotifier {
         request.files.add(http.MultipartFile.fromBytes(
           'file', bytes,
           filename: image.name.isNotEmpty ? image.name : 'profile-image.jpg',
+          contentType: MediaType.parse(mimeType),
         ));
         final streamed = await request.send().timeout(uploadTimeout);
         return http.Response.fromStream(streamed).timeout(uploadTimeout);
@@ -246,6 +252,21 @@ class AuthProvider extends ChangeNotifier {
     } catch (error) {
       debugPrint('[uploadUserImage] Error: $error');
       return _friendlyError(error);
+    }
+  }
+
+  /// Returns a best-guess MIME type for common image extensions.
+  String _mimeFromExtension(String filename) {
+    final ext = filename.split('.').last.toLowerCase();
+    switch (ext) {
+      case 'jpg':
+      case 'jpeg': return 'image/jpeg';
+      case 'png':  return 'image/png';
+      case 'gif':  return 'image/gif';
+      case 'webp': return 'image/webp';
+      case 'heic':
+      case 'heif': return 'image/heic';
+      default:     return 'image/jpeg'; // safe default for phone gallery picks
     }
   }
 
