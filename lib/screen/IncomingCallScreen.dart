@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import 'package:love_in_chat/model/emun/MessageType.dart';
+import 'package:love_in_chat/model/emun/MessageType.dart' as app_msg;
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
 import 'package:love_in_chat/service/CallSignalingService.dart';
@@ -78,7 +78,7 @@ class IncomingCallScreen extends StatelessWidget {
                           final kind = _isVideo ? 'VIDEO' : 'AUDIO';
                           await convos.sendMessage(
                             auth, convId, '$kind:MISSED',
-                            type: MessageType.CALL,
+                            type: app_msg.MessageType.CALL,
                           );
                         } catch (_) {}
                       }

@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
 
-import 'package:love_in_chat/model/emun/MessageType.dart';
+import 'package:love_in_chat/model/emun/MessageType.dart' as app_msg;
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
 import 'package:love_in_chat/service/CallSignalingService.dart';
@@ -79,7 +79,7 @@ class _CallScreenState extends State<CallScreen> {
         auth,
         widget.conversationId,
         _callContent(outcome),
-        type: MessageType.CALL,
+        type: app_msg.MessageType.CALL,
       );
     } catch (e) {
       debugPrint('[CallScreen] could not send call message: $e');
