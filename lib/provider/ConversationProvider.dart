@@ -12,13 +12,29 @@ import 'package:love_in_chat/model/emun/MessageType.dart';
 import '../api/api.dart';
 import '../model/Response/ChatEventType.dart';
 import '../model/Response/UserResponse.dart';
+import '../service/AccountManager.dart';
 import '../service/CacheService.dart';
+import '../service/CallSignalingService.dart';
 import '../service/StompService.dart';
 import 'AuthProvider.dart';
 
 class ConversationProvider extends ChangeNotifier {
   final String baseUrl = "${REST_URL}/api/conversations";
   final StompService _stompService = StompService();
+  CallSignalingService? _callSignaling;
+
+  /// Set by HomeScreen after STOMP connects. Exposes the signaling service to
+  /// the UI so the call buttons in ConversationPage can use it.
+  CallSignalingService get callSignaling {
+    _callSignaling ??= CallSignalingService(
+      stomp: _stompService,
+      localUserId: authProviderUserId ?? '',
+    );
+    return _callSignaling!;
+  }
+
+  /// Callback set by HomeScreen to show the incoming call overlay.
+  void Function(Map<String, dynamic> offer)? onIncomingCall;
 
   static const Duration _timeout = Duration(seconds: 15);
   static const int _conversationPageSize = 20;
@@ -249,6 +265,7 @@ class ConversationProvider extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   void initSocket(AuthProvider authProvider) {
+    authProviderUserId = authProvider.currentUserId;
     _stompService.connect(
       authProvider,
       onMessageReceived: (message) {
@@ -258,6 +275,11 @@ class ConversationProvider extends ChangeNotifier {
         // Global or fallback typing listener if needed
       },
     );
+    // Subscribe to WebRTC signaling after STOMP connects.
+    callSignaling.listenForIncoming();
+    callSignaling.onIncomingCall.stream.listen((offer) {
+      onIncomingCall?.call(offer);
+    });
   }
 
   void subscribeToActiveConversation(String conversationId) {
@@ -1097,6 +1119,8 @@ class ConversationProvider extends ChangeNotifier {
     _messageCacheTimer?.cancel();
     authProviderUserId = null;
     _stompService.disconnect();
+    _callSignaling?.dispose();
+    _callSignaling = null;
     notifyListeners();
   }
 

@@ -1,4 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import 'package:love_in_chat/provider/AuthProvider.dart';
+import 'package:love_in_chat/provider/ConversationProvider.dart';
+import '../../screen/CallScreen.dart';
 import 'ConversationDetailPage.dart';
 
 class ConversationHeader extends StatelessWidget implements PreferredSizeWidget {
@@ -66,10 +71,48 @@ class ConversationHeader extends StatelessWidget implements PreferredSizeWidget 
           icon: const Icon(Icons.info_outline, color: Colors.white),
           onPressed: () => _navigateToInfo(context),
         ),
-        IconButton(icon: const Icon(Icons.call, color: Colors.white), onPressed: () {}),
+        // Audio call button
+        IconButton(
+          tooltip: 'Voice call',
+          icon: const Icon(Icons.call, color: Colors.white),
+          onPressed: isGroup ? null : () => _startCall(context, video: false),
+        ),
+        // Video call button
+        IconButton(
+          tooltip: 'Video call',
+          icon: const Icon(Icons.videocam_outlined, color: Colors.white),
+          onPressed: isGroup ? null : () => _startCall(context, video: true),
+        ),
         const SizedBox(width: 4),
       ],
     );
+  }
+
+  void _startCall(BuildContext context, {required bool video}) {
+    final auth = context.read<AuthProvider>();
+    final convos = context.read<ConversationProvider>();
+    final currentUserId = auth.currentUserId ?? '';
+
+    // Find the other member's userId in a private conversation.
+    final conv = convos.conversations
+        .where((c) => c.id == conversationId)
+        .firstOrNull;
+    if (conv == null) return;
+
+    final other = conv.members
+        .where((m) => m.userId != currentUserId && m.leftAt == null)
+        .firstOrNull;
+    if (other == null) return;
+
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => CallScreen(
+        remoteUserId:     other.userId,
+        remoteName:       other.username,
+        conversationId:   conversationId,
+        isVideo:          video,
+        signalingService: convos.callSignaling,
+      ),
+    ));
   }
 
   @override

@@ -11,6 +11,7 @@ import '../util/AppBarStyle.dart';
 import 'ChatRequestScreen.dart';
 import 'ChatSearchDelegate.dart';
 import 'CreateGroupScreen.dart';
+import 'IncomingCallScreen.dart';
 import 'ProfileScreen.dart';
 import 'setting_util/SettingScreen.dart';
 import 'home_body/all.dart';
@@ -66,6 +67,29 @@ class _HomeScreenState extends State<HomeScreen> {
       };
 
       conversationProvider.initSocket(authProvider);
+      // Listen for incoming WebRTC calls and show the ringing overlay.
+      conversationProvider.onIncomingCall = (offer) {
+        if (!mounted) return;
+        final fromId = offer['fromUserId']?.toString() ?? '';
+        // Try to resolve the caller's name from the conversation member list.
+        String callerName = fromId;
+        for (final c in conversationProvider.conversations) {
+          final member = c.members
+              .where((m) => m.userId == fromId)
+              .firstOrNull;
+          if (member != null) {
+            callerName = member.username;
+            break;
+          }
+        }
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => IncomingCallScreen(
+            offer: offer,
+            callerName: callerName,
+            signalingService: conversationProvider.callSignaling,
+          ),
+        ));
+      };
       try {
         context.read<ChatRepository>().startListening();
       } catch (_) {

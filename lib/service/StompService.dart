@@ -250,4 +250,35 @@ class StompService {
     _activeTypingSubscriptions.clear();
     debugPrint('STOMP client deactivated and cleaned up.');
   }
+
+  // ── WebRTC signaling ───────────────────────────────────────────────────────
+
+  /// Subscribe to incoming WebRTC signaling messages.
+  /// Call this once after STOMP connects (from [CallSignalingService]).
+  void subscribeToSignaling(Function(StompFrame) onFrame) {
+    void doSub() {
+      if (_stompClient == null || !_isConnected) return;
+      _stompClient!.subscribe(
+        destination: '/user/queue/signal',
+        callback: onFrame,
+      );
+    }
+    if (_isConnected && _stompClient != null) {
+      doSub();
+    } else {
+      _pendingSubscriptions.add(doSub);
+    }
+  }
+
+  /// Forward a signaling payload to [targetUserId] via STOMP.
+  void sendSignal(String targetUserId, Map<String, dynamic> payload) {
+    if (_stompClient == null || !_isConnected) {
+      debugPrint('[Signaling] STOMP not connected — cannot send signal');
+      return;
+    }
+    _stompClient!.send(
+      destination: '/app/signal/$targetUserId',
+      body: json.encode(payload),
+    );
+  }
 }
