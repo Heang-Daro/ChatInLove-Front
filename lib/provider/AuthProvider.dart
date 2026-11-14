@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:love_in_chat/api/api.dart';
@@ -15,21 +16,17 @@ import '../service/DeviceLocationService.dart';
 
 class AuthProvider extends ChangeNotifier {
   final String baseUrl = "${REST_URL}/api/auth";
-
   UserResponse? _currentUser;
   UserResponse? get currentUser => _currentUser;
 
   static const _accessKey = 'access_token';
   static const _refreshKey = 'refresh_token';
   static const _timeout = Duration(seconds: 15);
-
   String? _accessToken;
   String? _refreshToken;
   bool _isLoading = false;
   bool _isInitialized = false;
   String? _errorMessage;
-
-  // Ensures only one refresh runs at a time (parallel requests share it).
   Completer<bool>? _refreshing;
 
   String? get accessToken => _accessToken;
@@ -58,74 +55,56 @@ class AuthProvider extends ChangeNotifier {
     try {
       final parts = token.split('.');
       if (parts.length != 3) return null;
-      return json.decode(
-        utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
-      ) as Map<String, dynamic>;
+      return json.decode(utf8.decode(base64Url.decode(base64Url.normalize(parts[1])))) as Map<String, dynamic>;
     } catch (_) {
       return null;
     }
   }
 
-  AuthProvider() {
-    _init();
-  }
+  AuthProvider() { _init(); }
 
   Future<void> _init() async {
     final prefs = await SharedPreferences.getInstance();
     _accessToken = prefs.getString(_accessKey);
     _refreshToken = prefs.getString(_refreshKey);
-
     final needsRefresh = _accessToken == null || _isExpired(_accessToken!);
     if (needsRefresh) {
       if (_refreshToken != null) {
         final success = await refreshAccessToken();
-        if (success && _accessToken != null) {
-          await _fetchUserProfile(_accessToken!);
-        }
+        if (success && _accessToken != null) await _fetchUserProfile(_accessToken!);
       } else {
         await logout();
       }
     } else if (_accessToken != null) {
       await _fetchUserProfile(_accessToken!);
     }
-
     _isInitialized = true;
     notifyListeners();
   }
 
   Future<void> _fetchUserProfile(String token) async {
     try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/principal'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-      ).timeout(_timeout);
-
+      final response = await http.get(Uri.parse('$baseUrl/principal'), headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      }).timeout(_timeout);
       if (response.statusCode == 200) {
         _currentUser = UserResponse.fromJson(json.decode(response.body));
         notifyListeners();
       }
-    } catch (_) {
-      // Profile loading should not prevent the app from opening.
-    }
+    } catch (_) {}
   }
 
   bool _isExpired(String token) {
     try {
       final parts = token.split('.');
       if (parts.length != 3) return false;
-      final payload = json.decode(
-        utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
-      ) as Map<String, dynamic>;
+      final payload = json.decode(utf8.decode(base64Url.decode(base64Url.normalize(parts[1])))) as Map<String, dynamic>;
       final exp = payload['exp'];
       if (exp is! num) return false;
       final expiry = DateTime.fromMillisecondsSinceEpoch(exp.toInt() * 1000);
       return DateTime.now().isAfter(expiry.subtract(const Duration(seconds: 30)));
-    } catch (_) {
-      return false;
-    }
+    } catch (_) { return false; }
   }
 
   Future<void> _saveTokens(String access, String? refresh) async {
@@ -149,124 +128,93 @@ class AuthProvider extends ChangeNotifier {
 
   Future<bool> _doRefresh() async {
     final rt = _refreshToken;
-    if (rt == null || rt.trim().isEmpty) {
-      await logout();
-      return false;
-    }
+    if (rt == null || rt.trim().isEmpty) { await logout(); return false; }
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/refresh'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({'refreshToken': rt}),
-      ).timeout(_timeout);
-
+      final response = await http.post(Uri.parse('$baseUrl/refresh'),
+          headers: {'Content-Type': 'application/json'}, body: json.encode({'refreshToken': rt})).timeout(_timeout);
       if (response.statusCode == 200) {
         final auth = AuthResponse.fromJson(json.decode(response.body));
         await _saveTokens(auth.accessToken, auth.refreshToken.isNotEmpty ? auth.refreshToken : rt);
         await _fetchUserProfile(auth.accessToken);
         return true;
       }
-
-      _errorMessage = "Session expired. Please log in again.";
+      _errorMessage = 'Session expired. Please log in again.';
       await logout();
       return false;
-    } catch (_) {
-      return false;
-    }
+    } catch (_) { return false; }
   }
 
-  Future<http.Response> authorizedRequest(
-    Future<http.Response> Function(String token) send,
-  ) async {
+  Future<http.Response> authorizedRequest(Future<http.Response> Function(String token) send) async {
     var token = _accessToken;
-    if (token == null) {
-      await logout();
-      throw StateError('Not authenticated');
-    }
-
+    if (token == null) { await logout(); throw StateError('Not authenticated'); }
     if (_isExpired(token)) {
-      if (!await refreshAccessToken()) {
-        await logout();
-        throw StateError('Session expired');
-      }
+      if (!await refreshAccessToken()) { await logout(); throw StateError('Session expired'); }
       token = _accessToken!;
     }
-
     var response = await send(token).timeout(_timeout);
     if (response.statusCode == 401 || response.statusCode == 403) {
       if (await refreshAccessToken()) {
         response = await send(_accessToken!).timeout(_timeout);
-        if (response.statusCode == 401 || response.statusCode == 403) {
-          await logout();
-          throw StateError('Unauthorized access');
-        }
-      } else {
-        await logout();
-        throw StateError('Session refresh failed');
-      }
+        if (response.statusCode == 401 || response.statusCode == 403) { await logout(); throw StateError('Unauthorized access'); }
+      } else { await logout(); throw StateError('Session refresh failed'); }
     }
     return response;
   }
 
-  /// Updates the signed-in user's username and email via PUT /api/auth/profile.
-  /// Returns null on success, otherwise a user-friendly error message.
   Future<String?> updateProfile({required String username, required String email}) async {
     try {
-      final response = await authorizedRequest((token) => http.put(
-            Uri.parse('$baseUrl/profile'),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-            body: json.encode({'username': username.trim(), 'email': email.trim()}),
-          ));
-
+      final response = await authorizedRequest((token) => http.put(Uri.parse('$baseUrl/profile'), headers: {
+        'Content-Type': 'application/json', 'Authorization': 'Bearer $token',
+      }, body: json.encode({'username': username.trim(), 'email': email.trim()})));
       if (response.statusCode == 200) {
         _currentUser = UserResponse.fromJson(json.decode(response.body));
         notifyListeners();
         return null;
       }
       return _responseMessage(response, 'Could not update your profile.');
-    } catch (error) {
-      return _friendlyError(error);
-    }
+    } catch (error) { return _friendlyError(error); }
   }
 
-  /// Changes the signed-in user's password via PUT /api/auth/change-password.
-  /// Returns null on success, otherwise a user-friendly error message.
-  Future<String?> changePassword({
-    required String currentPassword,
-    required String newPassword,
-  }) async {
+  /// Uploads a profile avatar or foreground image using the authenticated
+  /// multipart API. Returns null on success, otherwise a displayable error.
+  Future<String?> uploadUserImage(XFile image, {required bool foreground}) async {
     try {
-      final response = await authorizedRequest((token) => http.put(
-            Uri.parse('$baseUrl/change-password'),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-            body: json.encode({
-              'currentPassword': currentPassword,
-              'newPassword': newPassword,
-            }),
-          ));
+      final bytes = await image.readAsBytes();
+      final endpoint = foreground ? 'profile/foreground' : 'profile/image';
+      final response = await authorizedRequest((token) async {
+        final request = http.MultipartRequest('POST', Uri.parse('$baseUrl/$endpoint'));
+        request.headers['Authorization'] = 'Bearer $token';
+        request.files.add(http.MultipartFile.fromBytes(
+          'file', bytes,
+          filename: image.name.isNotEmpty ? image.name : 'profile-image.jpg',
+        ));
+        final streamed = await request.send();
+        return http.Response.fromStream(streamed);
+      });
+      if (response.statusCode == 200) {
+        _currentUser = UserResponse.fromJson(json.decode(response.body));
+        notifyListeners();
+        return null;
+      }
+      return _responseMessage(response, 'Could not upload the image.');
+    } catch (error) { return _friendlyError(error); }
+  }
 
+  Future<String?> changePassword({required String currentPassword, required String newPassword}) async {
+    try {
+      final response = await authorizedRequest((token) => http.put(Uri.parse('$baseUrl/change-password'), headers: {
+        'Content-Type': 'application/json', 'Authorization': 'Bearer $token',
+      }, body: json.encode({'currentPassword': currentPassword, 'newPassword': newPassword})));
       if (response.statusCode == 204 || response.statusCode == 200) return null;
       return _responseMessage(response, 'Could not change your password.');
-    } catch (error) {
-      return _friendlyError(error);
-    }
+    } catch (error) { return _friendlyError(error); }
   }
 
   String _responseMessage(http.Response response, String fallback) {
     try {
       final body = json.decode(response.body);
-      if (body is Map<String, dynamic> && body['message'] is String) {
-        return body['message'] as String;
-      }
-    } catch (_) {
-      // Use fallback for non-JSON error responses.
-    }
+      if (body is Map<String, dynamic> && body['message'] is String) return body['message'] as String;
+    } catch (_) {}
     return fallback;
   }
 
@@ -277,98 +225,53 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<bool> login(String email, String password) async {
-    _isLoading = true;
-    _errorMessage = null;
-    notifyListeners();
-
+    _isLoading = true; _errorMessage = null; notifyListeners();
     try {
       final profile = await DeviceLocationService.currentProfile();
-      final request = LoginRequest(
-        email: email,
-        password: password,
-        location: profile.location,
-        deviceName: profile.deviceName,
-        deviceType: profile.deviceType,
-      );
-      final response = await http.post(
-        Uri.parse('$baseUrl/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode(request.toJson()),
-      ).timeout(_timeout);
-
+      final request = LoginRequest(email: email, password: password, location: profile.location,
+          deviceName: profile.deviceName, deviceType: profile.deviceType);
+      final response = await http.post(Uri.parse('$baseUrl/login'), headers: {'Content-Type': 'application/json'},
+          body: json.encode(request.toJson())).timeout(_timeout);
       if (response.statusCode == 200) {
         final auth = AuthResponse.fromJson(json.decode(response.body));
         await _saveTokens(auth.accessToken, auth.refreshToken);
         await _fetchUserProfile(auth.accessToken);
-        _isLoading = false;
-        notifyListeners();
-        return true;
+        _isLoading = false; notifyListeners(); return true;
       }
       _errorMessage = 'Invalid email or password';
-    } on TimeoutException {
-      _errorMessage = 'Connection timed out. Please try again.';
-    } catch (e) {
-      _errorMessage = 'Network error: $e';
-    }
-
-    _isLoading = false;
-    notifyListeners();
-    return false;
+    } on TimeoutException { _errorMessage = 'Connection timed out. Please try again.'; }
+    catch (e) { _errorMessage = 'Network error: $e'; }
+    _isLoading = false; notifyListeners(); return false;
   }
 
   Future<bool> register(String email, String username, String password) async {
-    _isLoading = true;
-    _errorMessage = null;
-    notifyListeners();
-
+    _isLoading = true; _errorMessage = null; notifyListeners();
     try {
       final request = RegisterRequest(email: email, username: username, password: password);
-      final response = await http.post(
-        Uri.parse('$baseUrl/register'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode(request.toJson()),
-      ).timeout(_timeout);
-
+      final response = await http.post(Uri.parse('$baseUrl/register'), headers: {'Content-Type': 'application/json'},
+          body: json.encode(request.toJson())).timeout(_timeout);
       if (response.statusCode == 201 || response.statusCode == 200) {
         final auth = AuthResponse.fromJson(json.decode(response.body));
         await _saveTokens(auth.accessToken, auth.refreshToken);
         await _fetchUserProfile(auth.accessToken);
-        _isLoading = false;
-        notifyListeners();
-        return true;
+        _isLoading = false; notifyListeners(); return true;
       }
       _errorMessage = 'Registration failed';
-    } on TimeoutException {
-      _errorMessage = 'Connection timed out. Please try again.';
-    } catch (e) {
-      _errorMessage = 'Network error: $e';
-    }
-
-    _isLoading = false;
-    notifyListeners();
-    return false;
+    } on TimeoutException { _errorMessage = 'Connection timed out. Please try again.'; }
+    catch (e) { _errorMessage = 'Network error: $e'; }
+    _isLoading = false; notifyListeners(); return false;
   }
 
-  /// Syncs device name, type, and location for the currently authenticated session.
   Future<bool> syncCurrentDevice({bool askPermission = true}) async {
     final token = _accessToken;
     if (token == null || token.isEmpty) return false;
-
     try {
       final profile = await DeviceLocationService.currentProfile(askPermission: askPermission);
-      final response = await http.put(
-        Uri.parse('$baseUrl/devices/current'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-        body: json.encode(profile.toJson()),
-      ).timeout(_timeout);
+      final response = await http.put(Uri.parse('$baseUrl/devices/current'), headers: {
+        'Content-Type': 'application/json', 'Authorization': 'Bearer $token',
+      }, body: json.encode(profile.toJson())).timeout(_timeout);
       return response.statusCode >= 200 && response.statusCode < 300;
-    } catch (e) {
-      debugPrint('AuthProvider: could not sync the device: $e');
-      return false;
-    }
+    } catch (e) { debugPrint('AuthProvider: could not sync the device: $e'); return false; }
   }
 
   Future<void> logout() async {
@@ -376,24 +279,13 @@ class AuthProvider extends ChangeNotifier {
     final token = _accessToken;
     if (token != null && token.isNotEmpty) {
       try {
-        await http.post(
-          Uri.parse('$baseUrl/logout'),
-          headers: {'Authorization': 'Bearer $token'},
-        ).timeout(const Duration(seconds: 5));
-      } catch (_) {
-        // Local sign-out must still work when offline.
-      }
+        await http.post(Uri.parse('$baseUrl/logout'), headers: {'Authorization': 'Bearer $token'}).timeout(const Duration(seconds: 5));
+      } catch (_) {}
     }
-
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_accessKey);
-    await prefs.remove(_refreshKey);
-    _accessToken = null;
-    _refreshToken = null;
-    _currentUser = null;
-    if (userId != null && userId.isNotEmpty) {
-      await CacheService.clearUser(userId);
-    }
+    await prefs.remove(_accessKey); await prefs.remove(_refreshKey);
+    _accessToken = null; _refreshToken = null; _currentUser = null;
+    if (userId != null && userId.isNotEmpty) await CacheService.clearUser(userId);
     notifyListeners();
   }
 }
