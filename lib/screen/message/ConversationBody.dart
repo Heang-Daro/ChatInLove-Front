@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:love_in_chat/api/api.dart';
+import 'package:love_in_chat/screen/message/GroupCallMessageCard.dart';
 import 'package:love_in_chat/screen/message/VoiceMessageBubble.dart';
 import 'package:provider/provider.dart';
 import 'package:love_in_chat/model/Response/MessageResponse.dart';
@@ -214,6 +215,10 @@ class ConversationBody extends StatelessWidget {
         );
 
       case MessageType.CALL:
+        // GROUP_CALL_INVITE messages use the interactive card widget.
+        if (GroupCallMessageCard.isGroupCallMessage(message.content)) {
+          return GroupCallMessageCard(message: message, isMe: isMe);
+        }
         return _CallBubble(content: message.content, isMe: isMe);
 
       case MessageType.SYSTEM:

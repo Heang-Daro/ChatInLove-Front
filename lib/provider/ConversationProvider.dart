@@ -16,6 +16,7 @@ import '../service/AccountManager.dart';
 import '../service/CacheService.dart';
 import '../service/CallSignalingService.dart';
 import '../service/StompService.dart';
+import '../screen/message/GroupCallMessageCard.dart';
 import 'AuthProvider.dart';
 
 class ConversationProvider extends ChangeNotifier {
@@ -36,7 +37,9 @@ class ConversationProvider extends ChangeNotifier {
   }
 
   /// Callback set by HomeScreen to show the incoming call overlay.
-  void Function(Map<String, dynamic> offer)? onIncomingCall;
+  /// Active group call sessions — callSessionId → info.
+  /// Updated in real-time from GROUP_CALL_STARTED / JOIN_CALL / LEAVE_CALL signals.
+  final Map<String, ActiveGroupCallInfo> activeGroupCalls = {};
 
   static const Duration _timeout = Duration(seconds: 15);
   static const int _conversationPageSize = 20;
@@ -280,9 +283,24 @@ class ConversationProvider extends ChangeNotifier {
     _incomingCallSub?.cancel();
     callSignaling.listenForIncoming();
     _incomingCallSub = callSignaling.onIncomingCall.stream.listen((offer) {
-      if (_callInProgress) return; // already handling a call — drop duplicate
-      _callInProgress = true;
-      onIncomingCall?.call(offer);
+      final isGroup = offer['isGroup'] == true ||
+          offer['type']?.toString() == 'GROUP_CALL_STARTED';
+
+      if (isGroup) {
+        // Route group call signals to group call state handler.
+        handleGroupCallSignal(offer);
+        // Also trigger incoming call overlay for GROUP_CALL_STARTED.
+        if (offer['type']?.toString() == 'GROUP_CALL_STARTED') {
+          if (!_callInProgress) {
+            _callInProgress = true;
+            onIncomingCall?.call(offer);
+          }
+        }
+      } else {
+        if (_callInProgress) return;
+        _callInProgress = true;
+        onIncomingCall?.call(offer);
+      }
     });
   }
 
@@ -1105,6 +1123,57 @@ class ConversationProvider extends ChangeNotifier {
 
   void Function(MessageResponse message)? onNewMessageNotification;
 
+  /// Active group call sessions keyed by callSessionId.
+  /// Updated in real-time from GROUP_CALL_STARTED / JOIN_CALL / LEAVE_CALL signals.
+  final Map<String, ActiveGroupCallInfo> activeGroupCalls = {};
+
+  /// Callback set by HomeScreen to show incoming call overlay.
+  void Function(Map<String, dynamic> offer)? onIncomingCall;
+
+  // ── Handle GROUP_CALL signals arriving via STOMP /user/queue/signal ─────────
+  void handleGroupCallSignal(Map<String, dynamic> signal) {
+    final type         = signal['type']?.toString() ?? '';
+    final sessionId    = signal['callSessionId']?.toString() ?? '';
+    final convId       = signal['conversationId']?.toString() ?? '';
+    final callerId     = signal['fromUserId']?.toString() ?? '';
+    final rawParticipants = signal['activeParticipants'];
+    final int participantCount;
+    if (rawParticipants is List) {
+      participantCount = rawParticipants.length;
+    } else if (rawParticipants is Set) {
+      participantCount = rawParticipants.length;
+    } else {
+      participantCount = 1;
+    }
+    final callEnded = signal['callEnded'] == true;
+    if (sessionId.isEmpty) return;
+
+    if (type == 'GROUP_CALL_STARTED') {
+      activeGroupCalls[sessionId] = ActiveGroupCallInfo(
+        callSessionId:    sessionId,
+        conversationId:   convId,
+        callerUserId:     callerId,
+        participantCount: participantCount,
+      );
+      notifyListeners();
+    } else if (type == 'JOIN_CALL' || type == 'LEAVE_CALL') {
+      if (callEnded) {
+        activeGroupCalls.remove(sessionId);
+      } else {
+        final existing = activeGroupCalls[sessionId];
+        if (existing != null) {
+          activeGroupCalls[sessionId] = ActiveGroupCallInfo(
+            callSessionId:    sessionId,
+            conversationId:   existing.conversationId,
+            callerUserId:     existing.callerUserId,
+            participantCount: participantCount,
+          );
+        }
+      }
+      notifyListeners();
+    }
+  }
+
   /// Clears all in-memory conversation and message state when the user switches
   /// accounts. The local disk cache is NOT cleared here — CacheService.clearUser
   /// handles that in AuthProvider. Called by AccountSwitcherScreen.
@@ -1130,6 +1199,7 @@ class ConversationProvider extends ChangeNotifier {
     _incomingCallSub?.cancel();
     _incomingCallSub = null;
     _callInProgress  = false;
+    activeGroupCalls.clear();
     _stompService.disconnect();
     _callSignaling?.dispose();
     _callSignaling = null;

@@ -88,6 +88,7 @@ class CallSignalingService {
   MediaStream? _localStream;
   String? _remoteUserId;
   String? _conversationId;
+  String? _callSessionId; // server-assigned, used for accept/reject
   bool _isOffer = false; // true = we are the caller
 
   final List<RTCIceCandidate> _pendingCandidates = [];
@@ -132,7 +133,12 @@ class CallSignalingService {
 
     switch (type) {
       case SignalType.callOffer:
-        onIncomingCall.add(msg);
+        // Fix 1 — loopback guard: only trigger incoming call UI if the offer
+        // came from someone ELSE. The caller also receives their own signal
+        // stamped with their userId — this guard stops them hearing a ringtone.
+        if (msg['fromUserId'] != localUserId) {
+          onIncomingCall.add(msg);
+        }
         break;
       case SignalType.callAnswer:
         _handleAnswer(msg);
@@ -166,9 +172,9 @@ class CallSignalingService {
     required String conversationId,
     bool video = false,
   }) async {
-    _remoteUserId = remoteUserId;
-    _conversationId = conversationId;
-    _isOffer = true;
+    _remoteUserId    = remoteUserId;
+    _conversationId  = conversationId;
+    _isOffer         = true;
 
     _localStream = await _getUserMedia(video: video);
     onLocalStream.add(_localStream!);
@@ -180,10 +186,10 @@ class CallSignalingService {
     await _pc!.setLocalDescription(offer);
 
     _send(remoteUserId, {
-      'type': SignalType.callOffer.wire,
+      'type':           SignalType.callOffer.wire,
       'conversationId': conversationId,
-      'callType': video ? 'VIDEO' : 'AUDIO',
-      'sdp': offer.toMap(),
+      'callType':       video ? 'VIDEO' : 'AUDIO',
+      'sdp':            offer.toMap(),
     });
   }
 
@@ -196,9 +202,11 @@ class CallSignalingService {
     required Map<String, dynamic> offerMsg,
     bool video = false,
   }) async {
-    _remoteUserId = offerMsg['fromUserId']?.toString();
-    _conversationId = offerMsg['conversationId']?.toString();
-    _isOffer = false;
+    // Store server-assigned session ID for accept/reject.
+    _callSessionId = msg['callSessionId']?.toString();
+    _remoteUserId  = msg['fromUserId']?.toString();
+    _conversationId = msg['conversationId']?.toString();
+    _isOffer        = false;
 
     _localStream = await _getUserMedia(video: video);
     onLocalStream.add(_localStream!);
