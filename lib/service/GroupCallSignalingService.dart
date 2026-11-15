@@ -62,12 +62,14 @@ class GroupCallSignalingService {
   final String localUserId;
   final String conversationId;
   final bool video;
+  final List<String> memberUserIds;
 
   GroupCallSignalingService({
     required this.stomp,
     required this.localUserId,
     required this.conversationId,
     required this.video,
+    this.memberUserIds = const [],
   });
 
   // ── State ──────────────────────────────────────────────────────────────────
@@ -108,12 +110,24 @@ class GroupCallSignalingService {
     stomp.subscribeToSignaling(_onPrivateFrame);
     stomp.subscribeToGroupCallTopic(conversationId, _onGroupFrame);
 
-    stomp.sendGroupSignal(conversationId, {
+    final groupPayload = {
       'type': 'GROUP_CALL_STARTED',
+      'callSessionId': conversationId,
       'conversationId': conversationId,
       'callType': video ? 'VIDEO' : 'AUDIO',
       'callerUserId': localUserId,
-    });
+      'fromUserId': localUserId,
+      'isGroup': true,
+    };
+
+    stomp.sendGroupSignal(conversationId, groupPayload);
+
+    // Also send directly to each group member queue for instant alert
+    for (final mId in memberUserIds) {
+      if (mId.isNotEmpty && mId != localUserId) {
+        stomp.sendSignal(mId, groupPayload);
+      }
+    }
 
     debugPrint('[GroupCall] GROUP_CALL_STARTED broadcast sent for $conversationId');
   }
@@ -134,6 +148,7 @@ class GroupCallSignalingService {
 
     stomp.sendSignal(callerUserId, {
       'type': 'JOIN_CALL',
+      'fromUserId': localUserId,
       'conversationId': conversationId,
       'callType': video ? 'VIDEO' : 'AUDIO',
       'isGroup': true,
@@ -149,6 +164,7 @@ class GroupCallSignalingService {
     for (final p in _activeParticipants.values) {
       stomp.sendSignal(p.userId, {
         'type': 'LEAVE_CALL',
+        'fromUserId': localUserId,
         'conversationId': conversationId,
         'isGroup': true,
       });
@@ -156,8 +172,10 @@ class GroupCallSignalingService {
     // Also broadcast on group topic so non-connected members see it.
     stomp.sendGroupSignal(conversationId, {
       'type': 'LEAVE_CALL',
+      'fromUserId': localUserId,
       'conversationId': conversationId,
       'callerUserId': localUserId,
+      'isGroup': true,
     });
     await _teardown();
   }
@@ -237,6 +255,7 @@ class GroupCallSignalingService {
 
     stomp.sendSignal(from, {
       'type': 'CALL_OFFER',
+      'fromUserId': localUserId,
       'conversationId': conversationId,
       'callType': video ? 'VIDEO' : 'AUDIO',
       'sdp': offer.toMap(),
@@ -270,6 +289,7 @@ class GroupCallSignalingService {
 
     stomp.sendSignal(from, {
       'type': 'CALL_ANSWER',
+      'fromUserId': localUserId,
       'conversationId': conversationId,
       'sdp': answer.toMap(),
       'isGroup': true,
@@ -333,6 +353,7 @@ class GroupCallSignalingService {
     pc.onIceCandidate = (c) {
       stomp.sendSignal(p.userId, {
         'type': 'ICE_CANDIDATE',
+        'fromUserId': localUserId,
         'conversationId': conversationId,
         'isGroup': true,
         'candidate': c.toMap(),

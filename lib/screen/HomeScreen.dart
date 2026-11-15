@@ -77,7 +77,7 @@ class _HomeScreenState extends State<HomeScreen> {
         if (isGroup) {
           // ── Incoming group call ──────────────────────────────────────────
           final convId       = offer['conversationId']?.toString() ?? '';
-          final callerUserId = offer['fromUserId']?.toString() ?? '';
+          final callerUserId = (offer['fromUserId'] ?? offer['callerUserId'])?.toString() ?? '';
           final callType     = offer['callType']?.toString().toUpperCase();
 
           // Find the caller's display name from the conversation member list.

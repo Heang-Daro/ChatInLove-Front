@@ -91,18 +91,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
                     onTap: () async {
                       CallRingtoneService.stop();
                       widget.signalingService.rejectCall(widget.offer);
-                      final convId = widget.offer['conversationId']?.toString() ?? '';
-                      if (convId.isNotEmpty) {
-                        try {
-                          final auth = context.read<AuthProvider>();
-                          final convos = context.read<ConversationProvider>();
-                          final kind = _isVideo ? 'VIDEO' : 'AUDIO';
-                          await convos.sendMessage(
-                            auth, convId, '$kind:MISSED',
-                            type: app_msg.MessageType.CALL,
-                          );
-                        } catch (_) {}
-                      }
                       if (context.mounted) Navigator.of(context).pop();
                     },
                   ),

@@ -72,6 +72,11 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _sendCallMessage(String outcome) async {
     if (_messageSent) return;
+    // CRITICAL: Only the caller (widget.incomingOffer == null) logs the call summary message.
+    // If the callee logs it, the server attributes the message to the callee, making it
+    // appear as if the callee called the caller!
+    if (widget.incomingOffer != null) return;
+
     _messageSent = true;
     try {
       final auth = context.read<AuthProvider>();
@@ -99,7 +104,11 @@ class _CallScreenState extends State<CallScreen> {
 
     // Force audio to loudspeaker immediately on call start.
     if (!widget.isVideo) {
-      await Helper.setSpeakerphoneOn(true);
+      try {
+        await Helper.setSpeakerphoneOn(true);
+      } catch (e) {
+        debugPrint('[CallScreen] setSpeakerphoneOn error: $e');
+      }
     }
 
     // Play ringback for the caller while waiting for answer.
@@ -183,7 +192,9 @@ class _CallScreenState extends State<CallScreen> {
 
   Future<void> _toggleSpeaker() async {
     final next = !_speakerOn;
-    await Helper.setSpeakerphoneOn(next);
+    try {
+      await Helper.setSpeakerphoneOn(next);
+    } catch (_) {}
     if (mounted) setState(() => _speakerOn = next);
   }
 

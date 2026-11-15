@@ -23,6 +23,7 @@ class GroupCallScreen extends StatefulWidget {
   final String localUserId;
   final String? callerUserId;    // null = we are the caller
   final String? callerUsername;  // display name for the caller (callee path)
+  final List<String> memberUserIds;
 
   const GroupCallScreen({
     super.key,
@@ -32,6 +33,7 @@ class GroupCallScreen extends StatefulWidget {
     required this.localUserId,
     this.callerUserId,
     this.callerUsername,
+    this.memberUserIds = const [],
   });
 
   @override
@@ -63,6 +65,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
       localUserId:    widget.localUserId,
       conversationId: widget.conversationId,
       video:          widget.isVideo,
+      memberUserIds:  widget.memberUserIds,
     );
 
     _changeSub = _sig.onParticipantsChanged.stream.listen((_) {
@@ -106,7 +109,8 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
 
   Future<void> _leave() async {
     _timer?.cancel();
-    if (!_msgSent) {
+    // Only the caller logs the group call summary message
+    if (!_msgSent && widget.callerUserId == null) {
       _msgSent = true;
       try {
         final auth  = context.read<AuthProvider>();

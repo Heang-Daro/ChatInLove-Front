@@ -578,6 +578,30 @@ class ConversationProvider extends ChangeNotifier {
       _stompService.subscribeToConversation(convo.id, (message) {
         handleIncomingPrivateMessage(authProvider, message);
       });
+
+      if (convo.type == ConversationType.GROUP) {
+        _stompService.subscribeToGroupCallTopic(convo.id, (frame) {
+          if (frame.body == null) return;
+          try {
+            final msg = json.decode(frame.body!) as Map<String, dynamic>;
+            msg['isGroup'] = true;
+            handleGroupCallSignal(msg);
+            if (msg['type']?.toString() == 'GROUP_CALL_STARTED') {
+              final callerId = msg['fromUserId'] ?? msg['callerUserId'];
+              if (callerId != null &&
+                  callerId != authProvider.currentUserId &&
+                  callerId != authProviderUserId &&
+                  !_callInProgress) {
+                _callInProgress = true;
+                msg['fromUserId'] = callerId;
+                onIncomingCall?.call(msg);
+              }
+            }
+          } catch (e) {
+            debugPrint('[GroupCall] Error handling group call frame: $e');
+          }
+        });
+      }
     }
   }
 
@@ -1243,9 +1267,11 @@ class ConversationProvider extends ChangeNotifier {
   // ── Handle GROUP_CALL signals arriving via STOMP /user/queue/signal ─────────
   void handleGroupCallSignal(Map<String, dynamic> signal) {
     final type         = signal['type']?.toString() ?? '';
-    final sessionId    = signal['callSessionId']?.toString() ?? '';
+    final sessionId    = signal['callSessionId']?.toString().isNotEmpty == true
+        ? signal['callSessionId'].toString()
+        : signal['conversationId']?.toString() ?? '';
     final convId       = signal['conversationId']?.toString() ?? '';
-    final callerId     = signal['fromUserId']?.toString() ?? '';
+    final callerId     = (signal['fromUserId'] ?? signal['callerUserId'])?.toString() ?? '';
     final rawParticipants = signal['activeParticipants'];
     final int participantCount;
     if (rawParticipants is List) {

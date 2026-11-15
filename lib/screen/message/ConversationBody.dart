@@ -679,15 +679,27 @@ class _CallBubble extends StatelessWidget {
     final String label;
 
     if (notConnected) {
-      icon  = Icons.phone_missed;
-      label = isMissed
-          ? (isVideo ? 'Missed video call'    : 'Missed voice call')
-          : isDeclined
-              ? (isVideo ? 'Declined video call' : 'Declined voice call')
-              : (isVideo ? 'Cancelled video call': 'Cancelled voice call');
+      icon = isMe ? Icons.call_missed_outgoing_rounded : Icons.phone_missed_rounded;
+      if (isMissed) {
+        label = isMe
+            ? (isVideo ? 'No answer' : 'No answer')
+            : (isVideo ? 'Missed video call' : 'Missed voice call');
+      } else if (isDeclined) {
+        label = isMe
+            ? (isVideo ? 'Call declined' : 'Call declined')
+            : (isVideo ? 'Declined video call' : 'Declined voice call');
+      } else {
+        label = isMe
+            ? (isVideo ? 'Cancelled call' : 'Cancelled call')
+            : (isVideo ? 'Missed video call' : 'Missed voice call');
+      }
     } else {
-      icon  = isVideo ? Icons.videocam_rounded : Icons.call_rounded;
-      label = isVideo ? 'Video call' : 'Voice call';
+      icon = isVideo
+          ? Icons.videocam_rounded
+          : (isMe ? Icons.call_made_rounded : Icons.call_received_rounded);
+      label = isMe
+          ? (isVideo ? 'Outgoing video call' : 'Outgoing voice call')
+          : (isVideo ? 'Incoming video call' : 'Incoming voice call');
     }
 
     return Row(

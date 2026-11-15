@@ -128,7 +128,18 @@ class CallSignalingService {
     }
 
     final type = _parseSignalType(msg['type']?.toString());
-    if (type == null) return;
+    if (type == null) {
+      // Recognize group call signals delivered to private queue
+      if (msg['type']?.toString() == 'GROUP_CALL_STARTED') {
+        final caller = msg['fromUserId'] ?? msg['callerUserId'];
+        if (caller != null && caller != localUserId) {
+          msg['isGroup'] = true;
+          msg['fromUserId'] = caller;
+          onIncomingCall.add(msg);
+        }
+      }
+      return;
+    }
     debugPrint('[Signaling] received $type from ${msg['fromUserId']}');
 
     switch (type) {
@@ -187,6 +198,7 @@ class CallSignalingService {
 
     _send(remoteUserId, {
       'type':           SignalType.callOffer.wire,
+      'fromUserId':     localUserId,
       'conversationId': conversationId,
       'callType':       video ? 'VIDEO' : 'AUDIO',
       'sdp':            offer.toMap(),
@@ -232,6 +244,7 @@ class CallSignalingService {
 
     _send(_remoteUserId!, {
       'type': SignalType.callAnswer.wire,
+      'fromUserId': localUserId,
       'conversationId': _conversationId,
       'sdp': answer.toMap(),
     });
@@ -243,6 +256,7 @@ class CallSignalingService {
     if (from == null) return;
     _send(from, {
       'type': SignalType.callReject.wire,
+      'fromUserId': localUserId,
       'conversationId': offerMsg['conversationId'],
     });
   }
@@ -256,6 +270,7 @@ class CallSignalingService {
         'type': _isOffer
             ? SignalType.callCancel.wire   // caller cancels before answer
             : SignalType.callHangup.wire,  // either side ends active call
+        'fromUserId': localUserId,
         'conversationId': _conversationId,
       });
     }
@@ -271,6 +286,7 @@ class CallSignalingService {
       if (_remoteUserId == null) return;
       _send(_remoteUserId!, {
         'type': SignalType.iceCandidate.wire,
+        'fromUserId': localUserId,
         'conversationId': _conversationId,
         'candidate': candidate.toMap(),
       });
