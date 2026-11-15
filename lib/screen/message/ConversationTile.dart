@@ -132,8 +132,21 @@ class ConversationTile extends StatelessWidget {
       case MessageType.SYSTEM:
         return lastMsg.content;
       case MessageType.TEXT:
-        return lastMsg.content;
+        return _cleanMarkdownAndShortcuts(lastMsg.content);
     }
+  }
+
+  /// Strip markdown artifacts and shortcut templates so preview in ConversationTile is clean
+  String _cleanMarkdownAndShortcuts(String raw) {
+    var out = MessageShortcuts.apply(raw);
+    // Remove bold/italic asterisks, strikethrough, backticks
+    out = out.replaceAll('***', '')
+             .replaceAll('**', '')
+             .replaceAll('*', '')
+             .replaceAll('~~', '')
+             .replaceAll('```', ' ')
+             .replaceAll('`', '');
+    return out.trim();
   }
 
   Widget _buildSubtitleContent(
@@ -220,6 +233,15 @@ class ConversationTile extends StatelessWidget {
 
     if (chatName.isEmpty) {
       chatName = isGroup ? "Group Chat" : "Chat";
+    }
+
+    // Apply shortcut transformations if chat name contains shortcuts
+    if (chatName.contains('#')) {
+      chatName = MessageShortcuts.apply(chatName)
+          .replaceAll('***', '')
+          .replaceAll('**', '')
+          .replaceAll('*', '')
+          .replaceAll('`', '');
     }
 
     final avatarIcon = isGroup ? Icons.group : Icons.person;

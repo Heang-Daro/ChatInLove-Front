@@ -475,6 +475,7 @@ class _ConversationBodyState extends State<ConversationBody> {
 
         return FormattedMessageText(
           message.content,
+          isMe: isMe,
           style: TextStyle(
             color: isMe ? Colors.white : Theme.of(context).textTheme.bodyLarge?.color,
             fontSize: 14.5,
