@@ -114,13 +114,53 @@ class MessageShortcuts {
 
   // ───────────── Converting on send / format ─────────────
 
+  // Matches outer loop / loopn first: #loop3{...} or #loopn3{...}
+  // capturing the count and everything inside up to the matching closing brace.
+  static final RegExp _outerLoopRegex = RegExp(r'#(loopn?|while)(\d*)\{((?:[^{}]|\{[^{}]*\})*)\}');
   static final RegExp _shortcut = RegExp(r'#([A-Za-z]+)(\d*)\{([^{}]*)\}');
 
   /// Converts `#key{content}` into the final message text.
-  /// Innermost shortcuts are resolved first, so nesting works cleanly:
-  /// e.g. `#bold{#upper{#italic{text}}}}`
-  /// Unknown keys are left untouched.
+  /// Loops expand dynamically with iteration variables ($i, $index, $n, this),
+  /// and nested conditions evaluate properly for each iteration.
   static String apply(String input) {
+    var text = input;
+
+    // 1. First expand loops (loop, loopn) so that each iteration receives its index ($i, this)
+    for (var i = 0; i < 5; i++) {
+      var changed = false;
+      text = text.replaceAllMapped(_outerLoopRegex, (m) {
+        final keyName = m[1]!.toLowerCase();
+        final countStr = m[2]!;
+        final body = m[3]!;
+        final count = (int.tryParse(countStr) ?? 2).clamp(1, 50);
+        final isNewline = keyName == 'loopn';
+
+        changed = true;
+        final iterations = <String>[];
+        for (var step = 1; step <= count; step++) {
+          // Replace iteration placeholders: $i, $index, this, #i
+          var stepBody = body
+              .replaceAll(RegExp(r'\$i\b'), step.toString())
+              .replaceAll(RegExp(r'\$index\b'), step.toString())
+              .replaceAll(RegExp(r'\bthis\b'), step.toString())
+              .replaceAll('#i', step.toString());
+
+          // Apply shortcuts to each step body individually
+          stepBody = _applyInnerShortcuts(stepBody);
+          iterations.add(stepBody.trim());
+        }
+
+        return iterations.join(isNewline ? '\n' : ' ');
+      });
+
+      if (!changed) break;
+    }
+
+    // 2. Resolve any remaining shortcuts
+    return _applyInnerShortcuts(text);
+  }
+
+  static String _applyInnerShortcuts(String input) {
     var text = input;
     for (var i = 0; i < 15; i++) {
       var changed = false;
@@ -148,7 +188,6 @@ class MessageShortcuts {
         return '~~$c~~';
       case 'code':
         if (c.isEmpty) return '';
-        // If it's multi-line, format as code block, otherwise inline code
         if (c.contains('\n')) {
           return '```\n$c\n```';
         }
@@ -163,17 +202,12 @@ class MessageShortcuts {
         if (c.isEmpty) return '';
         return c.toLowerCase();
       case 'if':
-        // Supports: #if{cond ? value} or #if{val}
         return _evaluateIf(c);
       case 'else':
         return c.trim();
       case 'loop':
         if (c.isEmpty) return '';
         final n = (int.tryParse(count) ?? 2).clamp(1, 50);
-        // If content ends with \n or starts with \n, join with newline, otherwise space
-        if (c.contains('\n') || c.contains('#nl{}')) {
-          return List.filled(n, c.trim()).join('\n');
-        }
         return List.filled(n, c.trim()).join(' ');
       case 'loopn':
         if (c.isEmpty) return '';
@@ -197,30 +231,71 @@ class MessageShortcuts {
     final trimmed = content.trim();
     if (trimmed.isEmpty) return '';
 
-    // If has '?' e.g. "cond ? output"
+    // If has '?' e.g. "cond ? output" or "cond ? trueVal : falseVal"
     if (trimmed.contains('?')) {
-      final parts = trimmed.split('?');
-      final cond = parts[0].trim().toLowerCase();
-      final rest = parts.sublist(1).join('?');
-      final isTrue = cond.isNotEmpty &&
-          cond != 'false' &&
-          cond != '0' &&
-          cond != 'null' &&
-          cond != 'no';
+      final qIndex = trimmed.indexOf('?');
+      final condRaw = trimmed.substring(0, qIndex).trim();
+      final rest = trimmed.substring(qIndex + 1);
+
+      final isTrue = _evalCondition(condRaw);
 
       if (rest.contains(':')) {
-        final branches = rest.split(':');
-        return isTrue ? branches[0].trim() : branches.sublist(1).join(':').trim();
+        final colonIndex = rest.indexOf(':');
+        final trueVal = rest.substring(0, colonIndex).trim();
+        final falseVal = rest.substring(colonIndex + 1).trim();
+        return isTrue ? trueVal : falseVal;
       }
       return isTrue ? rest.trim() : '';
     }
 
-    // Direct check: if content is not "false" / "0" / "null" / "no"
-    final cond = trimmed.toLowerCase();
-    if (cond == 'false' || cond == '0' || cond == 'null' || cond == 'no') {
-      return '';
+    final isTrue = _evalCondition(trimmed);
+    return isTrue ? trimmed : '';
+  }
+
+  static bool _evalCondition(String condRaw) {
+    final cond = condRaw.trim();
+    if (cond.isEmpty) return false;
+
+    // Check equality: "a == b" or "a = b"
+    if (cond.contains('==')) {
+      final sides = cond.split('==');
+      return sides[0].trim().toLowerCase() == sides[1].trim().toLowerCase();
     }
-    return trimmed;
+    if (cond.contains('!=')) {
+      final sides = cond.split('!=');
+      return sides[0].trim().toLowerCase() != sides[1].trim().toLowerCase();
+    }
+    if (cond.contains('=')) {
+      final sides = cond.split('=');
+      return sides[0].trim().toLowerCase() == sides[1].trim().toLowerCase();
+    }
+    if (cond.contains('>=')) {
+      final sides = cond.split('>=');
+      final left = double.tryParse(sides[0].trim());
+      final right = double.tryParse(sides[1].trim());
+      if (left != null && right != null) return left >= right;
+    }
+    if (cond.contains('<=')) {
+      final sides = cond.split('<=');
+      final left = double.tryParse(sides[0].trim());
+      final right = double.tryParse(sides[1].trim());
+      if (left != null && right != null) return left <= right;
+    }
+    if (cond.contains('>')) {
+      final sides = cond.split('>');
+      final left = double.tryParse(sides[0].trim());
+      final right = double.tryParse(sides[1].trim());
+      if (left != null && right != null) return left > right;
+    }
+    if (cond.contains('<')) {
+      final sides = cond.split('<');
+      final left = double.tryParse(sides[0].trim());
+      final right = double.tryParse(sides[1].trim());
+      if (left != null && right != null) return left < right;
+    }
+
+    final lower = cond.toLowerCase();
+    return lower != 'false' && lower != '0' && lower != 'null' && lower != 'no';
   }
 }
 
