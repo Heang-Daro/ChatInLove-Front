@@ -11,24 +11,26 @@ import 'package:love_in_chat/provider/ConversationProvider.dart';
 import 'package:love_in_chat/service/GroupCallSignalingService.dart';
 import 'package:love_in_chat/service/StompService.dart';
 
-/// Full-screen group call screen (mesh WebRTC).
+/// Full-screen group call screen.
 ///
-/// Pass the full [members] list of the conversation. The screen filters out
-/// the local user and calls every other active member.
+/// [callerUserId] is non-null when this device is the **callee** joining an
+/// existing call. When null, this device is the **caller** starting a new call.
 class GroupCallScreen extends StatefulWidget {
   final String conversationId;
   final String groupName;
   final bool isVideo;
-  final List<ConversationMemberResponse> members;
   final String localUserId;
+  final String? callerUserId;    // null = we are the caller
+  final String? callerUsername;  // display name for the caller (callee path)
 
   const GroupCallScreen({
     super.key,
     required this.conversationId,
     required this.groupName,
     required this.isVideo,
-    required this.members,
     required this.localUserId,
+    this.callerUserId,
+    this.callerUsername,
   });
 
   @override
@@ -40,11 +42,12 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
 
   late final StreamSubscription _changeSub;
+  late final StreamSubscription _localSub;
 
-  bool _muted     = false;
-  bool _camOff    = false;
-  bool _joined    = false;
-  bool _msgSent   = false;
+  bool _muted    = false;
+  bool _camOff   = false;
+  bool _joined   = false; // true once at least one peer connects
+  bool _msgSent  = false;
 
   Duration _elapsed = Duration.zero;
   Timer? _timer;
@@ -62,34 +65,37 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     );
 
     _changeSub = _sig.onParticipantsChanged.stream.listen((_) {
-      if (mounted) setState(() {});
-      // Start the timer once anyone connects.
+      if (!mounted) return;
+      setState(() {});
       if (!_joined && _sig.participants.any((p) => p.connected)) {
         _joined = true;
         _startTimer();
       }
     });
 
-    _join();
+    _localSub = _sig.onLocalStream.stream.listen((stream) {
+      if (mounted) setState(() => _localRenderer.srcObject = stream);
+    });
+
+    _start();
   }
 
-  Future<void> _join() async {
-    final remoteMembers = widget.members
-        .where((m) => m.userId != widget.localUserId && m.leftAt == null)
-        .map((m) => {'userId': m.userId, 'username': m.username})
-        .toList();
-
-    await _sig.joinCall(remoteMembers);
-
-    if (_sig.localStream != null && mounted) {
-      setState(() => _localRenderer.srcObject = _sig.localStream);
+  Future<void> _start() async {
+    if (widget.callerUserId != null) {
+      // Callee path: join an existing call.
+      await _sig.joinExistingCall(
+        callerUserId:   widget.callerUserId!,
+        callerUsername: widget.callerUsername ?? widget.callerUserId!,
+      );
+    } else {
+      // Caller path: start the call and broadcast GROUP_CALL_STARTED.
+      await _sig.startCall();
     }
   }
 
   void _startTimer() {
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      setState(() => _elapsed += const Duration(seconds: 1));
+      if (mounted) setState(() => _elapsed += const Duration(seconds: 1));
     });
   }
 
@@ -100,7 +106,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
       try {
         final auth  = context.read<AuthProvider>();
         final convos = context.read<ConversationProvider>();
-        final kind  = widget.isVideo ? 'VIDEO' : 'AUDIO';
+        final kind   = widget.isVideo ? 'VIDEO' : 'AUDIO';
         final outcome = _joined ? _elapsedLabel : 'MISSED';
         await convos.sendMessage(auth, widget.conversationId,
             '$kind:$outcome', type: app_msg.MessageType.CALL);
@@ -119,6 +125,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   @override
   void dispose() {
     _changeSub.cancel();
+    _localSub.cancel();
     _localRenderer.dispose();
     _timer?.cancel();
     super.dispose();
@@ -126,17 +133,16 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Grid contains only the local tile + actually-joined remote participants.
     final participants = _sig.participants;
-    final totalTiles   = participants.length + 1; // +1 for local
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(fit: StackFit.expand, children: [
-        // ── Video grid ──────────────────────────────────────────────────────
         SafeArea(
           bottom: false,
           child: Column(children: [
-            // Header bar
+            // ── Header ────────────────────────────────────────────────────
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: Row(children: [
@@ -152,28 +158,42 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                       Text(
                         _joined
                             ? _elapsedLabel
-                            : '${participants.isEmpty ? 'Calling…' : '${participants.length} joined'}',
+                            : (widget.callerUserId == null
+                                ? 'Waiting for members to join…'
+                                : 'Connecting…'),
                         style: const TextStyle(
                             color: Colors.white70, fontSize: 13),
                       ),
                     ],
                   ),
                 ),
+                // Participant count badge
+                if (participants.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(12)),
+                    child: Text(
+                      '${participants.length + 1}', // +1 for local
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ),
               ]),
             ),
-            // Tiles
+            // ── Video grid — only active participants ─────────────────────
             Expanded(
               child: _VideoGrid(
                 localRenderer:  _localRenderer,
                 localName:      'You',
-                participants:   participants,
+                participants:   participants, // ← ONLY joined participants
                 isVideo:        widget.isVideo,
               ),
             ),
           ]),
         ),
 
-        // ── Control bar ─────────────────────────────────────────────────────
+        // ── Control bar ──────────────────────────────────────────────────
         Positioned(
           left: 0, right: 0,
           bottom: MediaQuery.of(context).padding.bottom + 24,
@@ -200,7 +220,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   }
 }
 
-// ── Responsive video grid ─────────────────────────────────────────────────────
+// ── Video grid ────────────────────────────────────────────────────────────────
 class _VideoGrid extends StatelessWidget {
   final RTCVideoRenderer localRenderer;
   final String localName;
@@ -218,27 +238,24 @@ class _VideoGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     final tiles = <Widget>[
       _ParticipantTile(
-        renderer: localRenderer,
-        name: localName,
-        isLocal: true,
-        isVideo: isVideo,
+        renderer:  localRenderer,
+        name:      localName,
+        isLocal:   true,
+        isVideo:   isVideo,
         connected: true,
       ),
       for (final p in participants)
         _ParticipantTile(
-          renderer: p.renderer,
-          name: p.username,
-          isLocal: false,
-          isVideo: isVideo,
+          renderer:  p.renderer,
+          name:      p.username,
+          isLocal:   false,
+          isVideo:   isVideo,
           connected: p.connected,
         ),
     ];
 
     final count = tiles.length;
-    int cols;
-    if (count <= 1)      cols = 1;
-    else if (count <= 4) cols = 2;
-    else                 cols = 3;
+    final cols  = count <= 1 ? 1 : count <= 4 ? 2 : 3;
 
     return GridView.count(
       crossAxisCount: cols,
@@ -277,42 +294,36 @@ class _ParticipantTile extends StatelessWidget {
             : Container(
                 color: Colors.grey.shade900,
                 alignment: Alignment.center,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    CircleAvatar(
-                      radius: 28,
-                      backgroundColor: Colors.pinkAccent.withValues(alpha: 0.3),
-                      child: Text(
-                        name.isNotEmpty ? name[0].toUpperCase() : '?',
-                        style: const TextStyle(
-                            fontSize: 24,
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold),
-                      ),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  CircleAvatar(
+                    radius: 28,
+                    backgroundColor: Colors.pinkAccent.withValues(alpha: 0.3),
+                    child: Text(
+                      name.isNotEmpty ? name[0].toUpperCase() : '?',
+                      style: const TextStyle(
+                          fontSize: 24,
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold),
                     ),
-                    const SizedBox(height: 8),
-                    if (!connected)
-                      const SizedBox(
-                        width: 18, height: 18,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white54),
-                      ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 8),
+                  if (!connected)
+                    const SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white54),
+                    ),
+                ]),
               ),
-        // Name label
         Positioned(
           left: 8, bottom: 8,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
-              color: Colors.black54,
-              borderRadius: BorderRadius.circular(8),
-            ),
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(8)),
             child: Text(name,
-                style: const TextStyle(
-                    color: Colors.white, fontSize: 11)),
+                style: const TextStyle(color: Colors.white, fontSize: 11)),
           ),
         ),
       ]),
@@ -380,8 +391,8 @@ class _Btn extends StatelessWidget {
         child: Column(children: [
           Container(
             width: 54, height: 54,
-            decoration:
-                BoxDecoration(color: Colors.white24, shape: BoxShape.circle),
+            decoration: BoxDecoration(
+                color: Colors.white24, shape: BoxShape.circle),
             child: Icon(icon, color: Colors.white, size: 24),
           ),
           const SizedBox(height: 5),

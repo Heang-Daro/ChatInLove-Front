@@ -117,6 +117,17 @@ class StompService {
           for (var sub in pending) {
             sub();
           }
+
+          // 5. Re-subscribe to the signal queue if a callback was registered
+          //    (handles reconnects — without this, incoming calls stop arriving
+          //    after a STOMP reconnect because the subscription is lost).
+          final sigCb = _signalingCallback;
+          if (sigCb != null) {
+            _stompClient?.subscribe(
+              destination: '/user/queue/signal',
+              callback: sigCb,
+            );
+          }
         },
         onWebSocketError: (error) {
           _isConnected = false;
@@ -248,14 +259,21 @@ class StompService {
     _pendingSubscriptions.clear();
     _activeConversationSubscriptions.clear();
     _activeTypingSubscriptions.clear();
+    _signalingCallback = null;
     debugPrint('STOMP client deactivated and cleaned up.');
   }
 
   // ── WebRTC signaling ───────────────────────────────────────────────────────
 
-  /// Subscribe to incoming WebRTC signaling messages.
-  /// Call this once after STOMP connects (from [CallSignalingService]).
+  /// The active signaling callback — stored so it can be re-registered on reconnect.
+  Function(StompFrame)? _signalingCallback;
+
+  /// Subscribe to incoming WebRTC signaling messages on /user/queue/signal.
+  /// Storing the callback ensures it is re-subscribed automatically after a
+  /// STOMP reconnection (which previously caused the 1-on-1 incoming call to
+  /// stop arriving after the first reconnect).
   void subscribeToSignaling(Function(StompFrame) onFrame) {
+    _signalingCallback = onFrame;
     void doSub() {
       if (_stompClient == null || !_isConnected) return;
       _stompClient!.subscribe(
@@ -270,7 +288,25 @@ class StompService {
     }
   }
 
-  /// Forward a signaling payload to [targetUserId] via STOMP.
+  /// Subscribe to group call events on a conversation's /call topic.
+  /// Used to receive GROUP_CALL_STARTED broadcasts.
+  void subscribeToGroupCallTopic(
+      String conversationId, Function(StompFrame) onFrame) {
+    void doSub() {
+      if (_stompClient == null || !_isConnected) return;
+      _stompClient!.subscribe(
+        destination: '/topic/conversations/$conversationId/call',
+        callback: onFrame,
+      );
+    }
+    if (_isConnected && _stompClient != null) {
+      doSub();
+    } else {
+      _pendingSubscriptions.add(doSub);
+    }
+  }
+
+  /// Forward a 1-to-1 signaling payload to [targetUserId] via STOMP.
   void sendSignal(String targetUserId, Map<String, dynamic> payload) {
     if (_stompClient == null || !_isConnected) {
       debugPrint('[Signaling] STOMP not connected — cannot send signal');
@@ -278,6 +314,18 @@ class StompService {
     }
     _stompClient!.send(
       destination: '/app/signal/$targetUserId',
+      body: json.encode(payload),
+    );
+  }
+
+  /// Broadcast a group call event to all members of [conversationId].
+  void sendGroupSignal(String conversationId, Map<String, dynamic> payload) {
+    if (_stompClient == null || !_isConnected) {
+      debugPrint('[Signaling] STOMP not connected — cannot send group signal');
+      return;
+    }
+    _stompClient!.send(
+      destination: '/app/signal/group/$conversationId',
       body: json.encode(payload),
     );
   }

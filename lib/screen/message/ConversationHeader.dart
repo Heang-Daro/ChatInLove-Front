@@ -100,14 +100,14 @@ class ConversationHeader extends StatelessWidget implements PreferredSizeWidget 
     if (conv == null) return;
 
     if (isGroup) {
-      // ── Group call ───────────────────────────────────────────────────────
+      // ── Group call — caller path ─────────────────────────────────────────
       Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => GroupCallScreen(
           conversationId: conversationId,
           groupName:      chatName,
           isVideo:        video,
-          members:        conv.members,
           localUserId:    currentUserId,
+          // callerUserId is null → this device is the caller
         ),
       ));
     } else {

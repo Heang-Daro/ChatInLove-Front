@@ -76,21 +76,30 @@ class _HomeScreenState extends State<HomeScreen> {
 
         if (isGroup) {
           // ── Incoming group call ──────────────────────────────────────────
-          final convId = offer['conversationId']?.toString() ?? '';
+          final convId       = offer['conversationId']?.toString() ?? '';
+          final callerUserId = offer['fromUserId']?.toString() ?? '';
+          final callType     = offer['callType']?.toString().toUpperCase();
+
+          // Find the caller's display name from the conversation member list.
+          String callerName = callerUserId;
           final conv = conversationProvider.conversations
               .where((c) => c.id == convId)
               .firstOrNull;
-          final members = conv?.members ?? [];
+          final callerMember = conv?.members
+              .where((m) => m.userId == callerUserId)
+              .firstOrNull;
+          if (callerMember != null) callerName = callerMember.username;
+
           final localUserId = context.read<AuthProvider>().currentUserId ?? '';
-          final callType = offer['callType']?.toString().toUpperCase();
 
           Navigator.of(context).push(MaterialPageRoute(
             builder: (_) => GroupCallScreen(
               conversationId: convId,
               groupName:      conv?.name ?? 'Group call',
               isVideo:        callType == 'VIDEO',
-              members:        members,
               localUserId:    localUserId,
+              callerUserId:   callerUserId,   // callee path — join existing
+              callerUsername: callerName,
             ),
           )).whenComplete(() => conversationProvider.markCallEnded());
         } else {
