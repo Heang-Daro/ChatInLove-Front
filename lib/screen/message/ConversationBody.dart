@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+
 import 'package:love_in_chat/api/api.dart';
 import 'package:love_in_chat/screen/message/GroupCallMessageCard.dart';
 import 'package:love_in_chat/screen/message/VoiceMessageBubble.dart';
+import 'package:love_in_chat/screen/message/message_shortcuts.dart';
 import 'package:provider/provider.dart';
 import 'package:love_in_chat/model/Response/MessageResponse.dart';
 import 'package:love_in_chat/model/emun/MessageType.dart';
@@ -14,7 +16,7 @@ class ConversationBody extends StatelessWidget {
 
   Widget _buildMessageContent(BuildContext context, MessageResponse message, bool isMe) {
     final String timeString = message.createdAt != null
-        ? "${message.createdAt!.hour.toString().padLeft(2, '0')}:${message.createdAt!.minute.toString().padLeft(2, '0')}"
+        ? "${message.createdAt!.toLocal().hour.toString().padLeft(2, '0')}:${message.createdAt!.toLocal().minute.toString().padLeft(2, '0')}"
         : "";
 
     switch (message.type) {
@@ -83,7 +85,6 @@ class ConversationBody extends StatelessWidget {
                 ),
               ),
             ),
-            // Telegram-style timestamp overlay on bottom right of the image
             Positioned(
               bottom: 6,
               right: 8,
@@ -215,7 +216,6 @@ class ConversationBody extends StatelessWidget {
         );
 
       case MessageType.CALL:
-        // GROUP_CALL_INVITE messages use the interactive card widget.
         if (GroupCallMessageCard.isGroupCallMessage(message.content)) {
           return GroupCallMessageCard(message: message, isMe: isMe);
         }
@@ -239,7 +239,7 @@ class ConversationBody extends StatelessWidget {
 
       case MessageType.TEXT:
       default:
-        return Text(
+        return FormattedMessageText(
           message.content,
           style: TextStyle(
             color: isMe ? Colors.white : Theme.of(context).textTheme.bodyLarge?.color,
@@ -254,8 +254,6 @@ class ConversationBody extends StatelessWidget {
     return Expanded(
       child: Consumer<ConversationProvider>(
         builder: (context, convoProvider, child) {
-          // Only block the screen with a spinner when there is really nothing
-          // to show. Cached messages stay visible while the server syncs.
           if (convoProvider.isLoadingMessages &&
               convoProvider.currentMessages.isEmpty) {
             return const Center(
@@ -274,11 +272,10 @@ class ConversationBody extends StatelessWidget {
 
           final authProvider = Provider.of<AuthProvider>(context, listen: false);
           final currentUserId = authProvider.currentUserId ?? "";
-
           final totalItemCount = messages.length + (typingUser != null ? 1 : 0);
 
           return ListView.builder(
-            reverse: true, // newest messages at the bottom
+            reverse: true,
             padding: const EdgeInsets.all(12),
             itemCount: totalItemCount,
             itemBuilder: (context, index) {
@@ -294,7 +291,8 @@ class ConversationBody extends StatelessWidget {
                 return _buildMessageContent(context, message, isMe);
               }
 
-              final bool isMedia = message.type == MessageType.IMAGE || message.type == MessageType.VIDEO;
+              final bool isMedia = message.type == MessageType.IMAGE ||
+                  message.type == MessageType.VIDEO;
 
               return Align(
                 alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
@@ -304,15 +302,15 @@ class ConversationBody extends StatelessWidget {
                       ? EdgeInsets.zero
                       : const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   constraints: BoxConstraints(
-                    maxWidth: MediaQuery.of(context).size.width * 0.78, // FIXED: Added proper multiplying operator '*'
+                    maxWidth: MediaQuery.of(context).size.width * 0.78,
                   ),
                   decoration: BoxDecoration(
                     gradient: isMe && !isMedia
                         ? LinearGradient(
-                      colors: [Colors.pinkAccent.shade200, Colors.pinkAccent.shade400],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    )
+                            colors: [Colors.pinkAccent.shade200, Colors.pinkAccent.shade400],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          )
                         : null,
                     color: isMe ? null : Theme.of(context).cardColor,
                     borderRadius: BorderRadius.only(
@@ -342,7 +340,7 @@ class ConversationBody extends StatelessWidget {
                           children: [
                             Text(
                               message.createdAt != null
-                                  ? "${message.createdAt!.hour.toString().padLeft(2, '0')}:${message.createdAt!.minute.toString().padLeft(2, '0')}"
+                                  ? "${message.createdAt!.toLocal().hour.toString().padLeft(2, '0')}:${message.createdAt!.toLocal().minute.toString().padLeft(2, '0')}"
                                   : "",
                               style: TextStyle(
                                 fontSize: 10,
@@ -372,18 +370,7 @@ class ConversationBody extends StatelessWidget {
   }
 }
 
-// ── Call bubble ──────────────────────────────────────────────────────────────
-/// Parses the CALL message content and renders an icon + label.
-///
-/// Content format (written by CallScreen / IncomingCallScreen):
-///   "AUDIO:02:34"   → voice call, connected, 2 min 34 sec
-///   "VIDEO:05:01"   → video call, connected, 5 min 1 sec
-///   "AUDIO:MISSED"  → missed voice call
-///   "VIDEO:MISSED"  → missed video call
-///   "AUDIO:REJECTED"→ declined voice call
-///   "VIDEO:REJECTED"→ declined video call
-///   "AUDIO:CANCELLED"→ caller cancelled before answer
-///   "VIDEO:CANCELLED"→ caller cancelled before answer
+// ── Call bubble ───────────────────────────────────────────────────────────────
 class _CallBubble extends StatelessWidget {
   final String content;
   final bool isMe;
@@ -394,30 +381,29 @@ class _CallBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final parts = content.split(':');
     final kind = parts.isNotEmpty ? parts[0].toUpperCase() : 'AUDIO';
-    // duration is everything after the kind prefix (handles mm:ss with colons)
     final rest = parts.length > 1 ? parts.sublist(1).join(':') : '';
 
-    final isVideo  = kind == 'VIDEO';
-    final isMissed = rest == 'MISSED';
-    final isDeclined   = rest == 'REJECTED';
-    final isCancelled  = rest == 'CANCELLED';
+    final isVideo     = kind == 'VIDEO';
+    final isMissed    = rest == 'MISSED';
+    final isDeclined  = rest == 'REJECTED';
+    final isCancelled = rest == 'CANCELLED';
     final notConnected = isMissed || isDeclined || isCancelled;
 
-    final Color fgColor = isMe ? Colors.white : Colors.pinkAccent;
+    final Color fgColor  = isMe ? Colors.white : Colors.pinkAccent;
     final Color dimColor = isMe
         ? Colors.white70
         : Theme.of(context).colorScheme.onSurfaceVariant;
 
-    IconData icon;
-    String label;
+    final IconData icon;
+    final String label;
 
     if (notConnected) {
       icon  = Icons.phone_missed;
       label = isMissed
-          ? (isVideo ? 'Missed video call' : 'Missed voice call')
+          ? (isVideo ? 'Missed video call'    : 'Missed voice call')
           : isDeclined
               ? (isVideo ? 'Declined video call' : 'Declined voice call')
-              : (isVideo ? 'Cancelled video call' : 'Cancelled voice call');
+              : (isVideo ? 'Cancelled video call': 'Cancelled voice call');
     } else {
       icon  = isVideo ? Icons.videocam_rounded : Icons.call_rounded;
       label = isVideo ? 'Video call' : 'Voice call';
@@ -429,7 +415,9 @@ class _CallBubble extends StatelessWidget {
         Icon(
           icon,
           size: 20,
-          color: notConnected ? Colors.redAccent.withValues(alpha: isMe ? 0.9 : 1.0) : fgColor,
+          color: notConnected
+              ? Colors.redAccent.withValues(alpha: isMe ? 0.9 : 1.0)
+              : fgColor,
         ),
         const SizedBox(width: 8),
         Column(
