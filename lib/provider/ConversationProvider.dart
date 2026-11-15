@@ -999,6 +999,27 @@ class ConversationProvider extends ChangeNotifier {
 
   Future<bool> editMessage(
       AuthProvider authProvider, String messageId, String newContent) async {
+    final index = _currentMessages.indexWhere((m) => m.id == messageId);
+    MessageResponse? originalMessage;
+    if (index != -1) {
+      originalMessage = _currentMessages[index];
+      // Optimistic update
+      _currentMessages[index] = MessageResponse(
+        id: originalMessage.id,
+        conversationId: originalMessage.conversationId,
+        senderId: originalMessage.senderId,
+        senderUsername: originalMessage.senderUsername,
+        type: originalMessage.type,
+        content: newContent,
+        isRead: originalMessage.isRead,
+        createdAt: originalMessage.createdAt,
+        editedAt: DateTime.now().toUtc(),
+        deletedAt: originalMessage.deletedAt,
+        relatedCallId: originalMessage.relatedCallId,
+      );
+      notifyListeners();
+    }
+
     try {
       final response = await authProvider.authorizedRequest((token) async {
         return await http.put(
@@ -1010,9 +1031,9 @@ class ConversationProvider extends ChangeNotifier {
 
       if (response.statusCode == 200) {
         final updatedMessage = MessageResponse.fromJson(jsonDecode(response.body));
-        final index = _currentMessages.indexWhere((m) => m.id == messageId);
-        if (index != -1) {
-          _currentMessages[index] = updatedMessage;
+        final targetIndex = _currentMessages.indexWhere((m) => m.id == messageId);
+        if (targetIndex != -1) {
+          _currentMessages[targetIndex] = updatedMessage;
           final activeId = _activeConversationId;
           if (activeId != null) {
             _scheduleMessageCacheSave(authProvider, activeId);
@@ -1021,15 +1042,31 @@ class ConversationProvider extends ChangeNotifier {
         }
         return true;
       }
+      // Rollback on failure
+      if (originalMessage != null && index != -1 && index < _currentMessages.length) {
+        _currentMessages[index] = originalMessage;
+        notifyListeners();
+      }
       return false;
     } catch (e) {
       debugPrint("Failed to edit message: $e");
+      if (originalMessage != null && index != -1 && index < _currentMessages.length) {
+        _currentMessages[index] = originalMessage;
+        notifyListeners();
+      }
       return false;
     }
   }
 
   Future<bool> deleteMessage(
       AuthProvider authProvider, String messageId) async {
+    final index = _currentMessages.indexWhere((m) => m.id == messageId);
+    MessageResponse? removedMessage;
+    if (index != -1) {
+      removedMessage = _currentMessages.removeAt(index);
+      notifyListeners();
+    }
+
     try {
       final response = await authProvider.authorizedRequest((token) async {
         return await http.delete(
@@ -1039,16 +1076,92 @@ class ConversationProvider extends ChangeNotifier {
       }).timeout(_timeout);
 
       if (response.statusCode == 200 || response.statusCode == 204) {
-        _currentMessages.removeWhere((m) => m.id == messageId);
         if (_activeConversationId != null) {
           _scheduleMessageCacheSave(authProvider, _activeConversationId!);
         }
-        notifyListeners();
         return true;
+      }
+      // Rollback if delete fails
+      if (removedMessage != null) {
+        _currentMessages.insert(index.clamp(0, _currentMessages.length), removedMessage);
+        notifyListeners();
       }
       return false;
     } catch (e) {
       debugPrint("Failed to delete message: $e");
+      if (removedMessage != null) {
+        _currentMessages.insert(index.clamp(0, _currentMessages.length), removedMessage);
+        notifyListeners();
+      }
+      return false;
+    }
+  }
+
+  /// Rename / update conversation details (Title, Description).
+  Future<bool> updateConversation(
+    AuthProvider authProvider,
+    String conversationId, {
+    required String name,
+    String? description,
+  }) async {
+    final index = _conversations.indexWhere((c) => c.id == conversationId);
+    ConversationResponse? originalChat;
+
+    if (index != -1) {
+      originalChat = _conversations[index];
+      // Optimistic update
+      _conversations[index] = ConversationResponse(
+        id: originalChat.id,
+        type: originalChat.type,
+        name: name,
+        description: description ?? originalChat.description,
+        createdAt: originalChat.createdAt,
+        lastMessageAt: originalChat.lastMessageAt,
+        members: originalChat.members,
+        lastMessage: originalChat.lastMessage,
+        status: originalChat.status,
+        requesterId: originalChat.requesterId,
+      );
+      notifyListeners();
+    }
+
+    try {
+      final response = await authProvider.authorizedRequest((token) async {
+        return await http.put(
+          Uri.parse('$baseUrl/$conversationId'),
+          headers: _headers(token),
+          body: jsonEncode({
+            'name': name.trim(),
+            if (description != null) 'description': description.trim(),
+          }),
+        );
+      }).timeout(_timeout);
+
+      if (response.statusCode == 200) {
+        final updated = ConversationResponse.fromJson(jsonDecode(response.body));
+        final targetIndex = _conversations.indexWhere((c) => c.id == conversationId);
+        if (targetIndex != -1) {
+          _conversations[targetIndex] = updated;
+        } else {
+          _conversations.insert(0, updated);
+        }
+        _scheduleConversationCacheSave(authProvider);
+        notifyListeners();
+        return true;
+      }
+
+      // Rollback if server rejected
+      if (originalChat != null && index != -1 && index < _conversations.length) {
+        _conversations[index] = originalChat;
+        notifyListeners();
+      }
+      return false;
+    } catch (e) {
+      debugPrint("Failed to update conversation: $e");
+      if (originalChat != null && index != -1 && index < _conversations.length) {
+        _conversations[index] = originalChat;
+        notifyListeners();
+      }
       return false;
     }
   }

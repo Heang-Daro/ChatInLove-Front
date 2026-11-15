@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:love_in_chat/model/Response/ConversationResponse.dart';
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
+import '../../util/AnimatedComponents.dart';
 import '../message/ConversationTile.dart';
 
 class GroupChat extends StatelessWidget {
@@ -25,9 +26,7 @@ class GroupChat extends StatelessWidget {
     final isLoading = context.watch<ConversationProvider>().isLoading;
 
     if (isLoading && chats.isEmpty) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.pinkAccent),
-      );
+      return const ConversationListSkeleton();
     }
 
     if (chats.isEmpty) {

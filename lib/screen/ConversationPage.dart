@@ -40,6 +40,7 @@ class ConversationPage extends StatefulWidget {
 class _ConversationPageState extends State<ConversationPage> {
   // Use ShortcutTextController so valid #keys are highlighted while typing.
   final ShortcutTextController _messageController = ShortcutTextController();
+  final ScrollController _scrollController = ScrollController();
   final ImagePicker _picker = ImagePicker();
   final AudioRecorder _audioRecorder = AudioRecorder();
 
@@ -58,10 +59,30 @@ class _ConversationPageState extends State<ConversationPage> {
   void initState() {
     super.initState();
     _messageController.addListener(_onTextChanged);
+    _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final auth = context.read<AuthProvider>();
       context.read<ConversationProvider>().fetchMessages(auth, widget.conversationId);
     });
+  }
+
+  void _onScroll() {
+    // When scrolling near the top of the reverse ListView (which is maxScrollExtent)
+    if (_scrollController.hasClients &&
+        _scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+      final auth = context.read<AuthProvider>();
+      context.read<ConversationProvider>().loadMoreMessages(auth, widget.conversationId);
+    }
+  }
+
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        0.0, // In reverse list, 0.0 is the latest message!
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+      );
+    }
   }
 
   void _onTextChanged() {
@@ -82,6 +103,7 @@ class _ConversationPageState extends State<ConversationPage> {
   void dispose() {
     _messageController.removeListener(_onTextChanged);
     _messageController.dispose();
+    _scrollController.dispose();
     _audioRecorder.dispose();
     _amplitudeTicker?.cancel();
     _amplitudeController?.close();
@@ -147,6 +169,7 @@ class _ConversationPageState extends State<ConversationPage> {
       // The text contains at least one valid #key{} shortcut.
       final converted = MessageShortcuts.apply(raw);
       _messageController.clear();
+      _scrollToBottom();
       context.read<ConversationProvider>().sendTyping(widget.conversationId, isTyping: false);
       await context.read<ConversationProvider>().sendMessage(
         context.read<AuthProvider>(),
@@ -157,6 +180,7 @@ class _ConversationPageState extends State<ConversationPage> {
     // ── Branch 3: plain text (most common path) ───────────────────────────
     } else {
       _messageController.clear();
+      _scrollToBottom();
       context.read<ConversationProvider>().sendTyping(widget.conversationId, isTyping: false);
       await context.read<ConversationProvider>().sendMessage(
         context.read<AuthProvider>(),
@@ -310,7 +334,7 @@ class _ConversationPageState extends State<ConversationPage> {
           color: backgroundColor,
           child: Column(
             children: [
-              const ConversationBody(),
+              ConversationBody(scrollController: _scrollController),
               ConversationInput(
                 controller: _messageController,
                 onSend: _sendMessage,

@@ -5,6 +5,7 @@ import 'package:love_in_chat/provider/ConversationProvider.dart';
 import 'package:love_in_chat/model/Response/ConversationResponse.dart';
 import '../../model/emun/ConversationStatus.dart';
 import '../../model/emun/ConversationType.dart';
+import '../../util/AnimatedComponents.dart';
 import '../message/ConversationTile.dart';
 import 'private.dart';
 import 'group.dart';
@@ -143,9 +144,7 @@ class _AllChatState extends State<AllChat> with SingleTickerProviderStateMixin {
 
   Widget _buildChatList(ConversationProvider provider, List<ConversationResponse> chats) {
     if (provider.isLoading && chats.isEmpty) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.pinkAccent),
-      );
+      return const ConversationListSkeleton();
     }
 
     if (chats.isEmpty) {

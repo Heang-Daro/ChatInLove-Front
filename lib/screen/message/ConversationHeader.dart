@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'package:love_in_chat/model/Response/ConversationResponse.dart';
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
 import '../../screen/CallScreen.dart';
 import '../../screen/GroupCallScreen.dart';
+import '../../util/AnimatedComponents.dart';
 import 'ConversationDetailPage.dart';
 
 class ConversationHeader extends StatelessWidget implements PreferredSizeWidget {
@@ -31,61 +33,144 @@ class ConversationHeader extends StatelessWidget implements PreferredSizeWidget 
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return AppBar(
-      backgroundColor: Colors.pinkAccent,
-      title: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: () => _navigateToInfo(context),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-          child: Row(
-            children: [
-              CircleAvatar(
-                backgroundColor: Colors.white,
-                radius: 18,
-                child: Icon(avatar, color: Colors.pinkAccent, size: 20),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      chatName,
-                      style: const TextStyle(fontSize: 16, color: Colors.white),
-                    ),
-                    Text(
-                      isGroup ? "Tap for group info & members" : "Tap for contact info",
-                      style: const TextStyle(fontSize: 11, color: Colors.white70),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+  void _showRenameDialog(BuildContext context, String currentTitle) {
+    final controller = TextEditingController(text: currentTitle);
+
+    AnimatedDialog.show(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.edit_rounded, color: Colors.pinkAccent),
+            SizedBox(width: 8),
+            Text("Edit Conversation Title"),
+          ],
+        ),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: InputDecoration(
+            hintText: "Enter title...",
+            filled: true,
+            fillColor: Colors.pink.withValues(alpha: 0.05),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: Colors.pinkAccent, width: 1.5),
+            ),
           ),
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.pinkAccent,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () async {
+              final newTitle = controller.text.trim();
+              if (newTitle.isEmpty) return;
+              Navigator.pop(ctx);
+
+              final authProvider = context.read<AuthProvider>();
+              final convoProvider = context.read<ConversationProvider>();
+              final success = await convoProvider.updateConversation(
+                authProvider,
+                conversationId,
+                name: newTitle,
+              );
+
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(success ? "Title updated" : "Failed to update title"),
+                    backgroundColor: success ? Colors.pinkAccent : Colors.redAccent,
+                  ),
+                );
+              }
+            },
+            child: const Text("Save", style: TextStyle(color: Colors.white)),
+          ),
+        ],
       ),
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.info_outline, color: Colors.white),
-          onPressed: () => _navigateToInfo(context),
-        ),
-        // Audio call button
-        IconButton(
-          tooltip: isGroup ? 'Group voice call' : 'Voice call',
-          icon: const Icon(Icons.call, color: Colors.white),
-          onPressed: () => _startCall(context, video: false),
-        ),
-        // Video call button
-        IconButton(
-          tooltip: isGroup ? 'Group video call' : 'Video call',
-          icon: const Icon(Icons.videocam_outlined, color: Colors.white),
-          onPressed: () => _startCall(context, video: true),
-        ),
-        const SizedBox(width: 4),
-      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<ConversationProvider>(
+      builder: (context, convoProvider, _) {
+        final currentConvo = convoProvider.conversations
+            .where((c) => c.id == conversationId)
+            .firstOrNull;
+        final displayTitle = currentConvo?.name?.isNotEmpty == true
+            ? currentConvo!.name!
+            : chatName;
+
+        return AppBar(
+          backgroundColor: Colors.pinkAccent,
+          title: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => _navigateToInfo(context),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: Colors.white,
+                    radius: 18,
+                    child: Icon(avatar, color: Colors.pinkAccent, size: 20),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          displayTitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 16, color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          isGroup ? "Tap for group info & members" : "Tap for contact info",
+                          style: const TextStyle(fontSize: 11, color: Colors.white70),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            // Quick rename button
+            IconButton(
+              tooltip: 'Edit Title',
+              icon: const Icon(Icons.edit_note_rounded, color: Colors.white),
+              onPressed: () => _showRenameDialog(context, displayTitle),
+            ),
+            // Audio call button
+            IconButton(
+              tooltip: isGroup ? 'Group voice call' : 'Voice call',
+              icon: const Icon(Icons.call, color: Colors.white),
+              onPressed: () => _startCall(context, video: false),
+            ),
+            // Video call button
+            IconButton(
+              tooltip: isGroup ? 'Group video call' : 'Video call',
+              icon: const Icon(Icons.videocam_outlined, color: Colors.white),
+              onPressed: () => _startCall(context, video: true),
+            ),
+            const SizedBox(width: 4),
+          ],
+        );
+      },
     );
   }
 

@@ -232,57 +232,89 @@ class ConversationTile extends StatelessWidget {
 
     final bool isMyMessage = lastMsg != null && lastMsg.senderId == currentUserId;
 
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      leading: _buildAvatar(isGroup, currentUserId),
-      title: Text(
-        chatName,
-        style: TextStyle(
-          fontWeight: hasUnreadMessage ? FontWeight.w900 : FontWeight.bold,
-          color: Theme.of(context).colorScheme.onSurface,
-        ),
-      ),
-      subtitle: _buildSubtitleContent(context, lastMsg, isMyMessage, hasUnreadMessage),
-      trailing: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Text(
-            chat.lastMessageAt != null
-                ? _formatTime(chat.lastMessageAt!.toLocal())
-                : "",
-            style: TextStyle(
-              fontSize: 12,
-              color: hasUnreadMessage ? Colors.pinkAccent : Theme.of(context).colorScheme.onSurfaceVariant,
-              fontWeight: hasUnreadMessage ? FontWeight.bold : FontWeight.normal,
-            ),
-          ),
-          const SizedBox(height: 4),
-          // Unread pink dot badge for incoming messages
-          if (hasUnreadMessage)
-            Container(
-              width: 10,
-              height: 10,
-              decoration: const BoxDecoration(
-                color: Colors.pinkAccent,
-                shape: BoxShape.circle,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () {
+          Navigator.push(
+            context,
+            AnimatedPageRoute(
+              page: ConversationPage(
+                conversationId: chat.id,
+                chatName: chatName,
+                avatar: avatarIcon,
+                isGroup: isGroup,
               ),
             ),
-        ],
-      ),
-      onTap: () {
-        Navigator.push(
-          context,
-          AnimatedPageRoute(
-            page: ConversationPage(
-              conversationId: chat.id,
-              chatName: chatName,
-              avatar: avatarIcon,
-              isGroup: isGroup,
-            ),
+          );
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              _buildAvatar(isGroup, currentUserId),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            chatName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: hasUnreadMessage ? FontWeight.w900 : FontWeight.bold,
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          chat.lastMessageAt != null
+                              ? _formatTime(chat.lastMessageAt!.toLocal())
+                              : "",
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: hasUnreadMessage
+                                ? Colors.pinkAccent
+                                : Theme.of(context).colorScheme.onSurfaceVariant,
+                            fontWeight: hasUnreadMessage ? FontWeight.bold : FontWeight.normal,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildSubtitleContent(context, lastMsg, isMyMessage, hasUnreadMessage),
+                        ),
+                        if (hasUnreadMessage) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            width: 9,
+                            height: 9,
+                            decoration: const BoxDecoration(
+                              color: Colors.pinkAccent,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }

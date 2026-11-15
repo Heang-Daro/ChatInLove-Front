@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:love_in_chat/model/Response/MessageResponse.dart';
 
 /// ----------------------------------------------------------------------------
-/// Custom Animated Page Route
+/// Smooth Spring / Cubic Animated Page Route (Slide + Subtle Fade)
 /// ----------------------------------------------------------------------------
 class AnimatedPageRoute<T> extends PageRouteBuilder<T> {
   final Widget page;
@@ -11,26 +11,267 @@ class AnimatedPageRoute<T> extends PageRouteBuilder<T> {
       : super(
           pageBuilder: (context, animation, secondaryAnimation) => page,
           transitionsBuilder: (context, animation, secondaryAnimation, child) {
+            // Respect accessibility settings
+            final mediaQuery = MediaQuery.maybeOf(context);
+            if (mediaQuery != null && mediaQuery.disableAnimations) {
+              return child;
+            }
+
             const begin = Offset(1.0, 0.0);
             const end = Offset.zero;
-            const curve = Curves.easeInOutCubic;
+            const curve = Curves.fastOutSlowIn;
 
-            var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
-            var offsetAnimation = animation.drive(tween);
-            var fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-              CurvedAnimation(parent: animation, curve: Curves.easeIn),
+            final offsetAnimation = animation.drive(
+              Tween(begin: begin, end: end).chain(CurveTween(curve: curve)),
+            );
+            final fadeAnimation = animation.drive(
+              Tween<double>(begin: 0.0, end: 1.0).chain(CurveTween(curve: Curves.easeIn)),
+            );
+
+            // Subtle slide-out for previous screen
+            final secondaryOffset = secondaryAnimation.drive(
+              Tween(begin: Offset.zero, end: const Offset(-0.3, 0.0))
+                  .chain(CurveTween(curve: Curves.fastOutSlowIn)),
             );
 
             return SlideTransition(
-              position: offsetAnimation,
-              child: FadeTransition(
-                opacity: fadeAnimation,
-                child: child,
+              position: secondaryOffset,
+              child: SlideTransition(
+                position: offsetAnimation,
+                child: FadeTransition(
+                  opacity: fadeAnimation,
+                  child: child,
+                ),
               ),
             );
           },
-          transitionDuration: const Duration(milliseconds: 300),
+          transitionDuration: const Duration(milliseconds: 320),
+          reverseTransitionDuration: const Duration(milliseconds: 280),
         );
+}
+
+/// ----------------------------------------------------------------------------
+/// Smooth Modal / Dialog Transition Helper
+/// ----------------------------------------------------------------------------
+class AnimatedDialog {
+  static Future<T?> show<T>({
+    required BuildContext context,
+    required WidgetBuilder builder,
+    bool barrierDismissible = true,
+  }) {
+    return showGeneralDialog<T>(
+      context: context,
+      barrierDismissible: barrierDismissible,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: Colors.black54,
+      transitionDuration: const Duration(milliseconds: 250),
+      pageBuilder: (ctx, anim1, anim2) => builder(ctx),
+      transitionBuilder: (ctx, anim, secondaryAnim, child) {
+        final curve = CurvedAnimation(parent: anim, curve: Curves.easeOutBack);
+        return ScaleTransition(
+          scale: Tween<double>(begin: 0.88, end: 1.0).animate(curve),
+          child: FadeTransition(
+            opacity: anim,
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// ----------------------------------------------------------------------------
+/// Smooth Bottom Sheet Transition Helper
+/// ----------------------------------------------------------------------------
+class AnimatedBottomSheet {
+  static Future<T?> show<T>({
+    required BuildContext context,
+    required WidgetBuilder builder,
+    bool isScrollControlled = true,
+  }) {
+    return showModalBottomSheet<T>(
+      context: context,
+      isScrollControlled: isScrollControlled,
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      builder: builder,
+    );
+  }
+}
+
+/// ----------------------------------------------------------------------------
+/// Interactive Scale on Press / Tap Button Animation Wrapper
+/// ----------------------------------------------------------------------------
+class AnimatedScaleButton extends StatefulWidget {
+  final Widget child;
+  final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
+  final double scaleDown;
+  final Duration duration;
+
+  const AnimatedScaleButton({
+    super.key,
+    required this.child,
+    this.onTap,
+    this.onLongPress,
+    this.scaleDown = 0.94,
+    this.duration = const Duration(milliseconds: 110),
+  });
+
+  @override
+  State<AnimatedScaleButton> createState() => _AnimatedScaleButtonState();
+}
+
+class _AnimatedScaleButtonState extends State<AnimatedScaleButton> {
+  bool _isPressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final mediaQuery = MediaQuery.maybeOf(context);
+    final reduceMotion = mediaQuery?.disableAnimations ?? false;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) {
+        if (!reduceMotion && mounted) setState(() => _isPressed = true);
+      },
+      onTapUp: (_) {
+        if (!reduceMotion && mounted) setState(() => _isPressed = false);
+      },
+      onTapCancel: () {
+        if (!reduceMotion && mounted) setState(() => _isPressed = false);
+      },
+      onTap: widget.onTap,
+      onLongPress: widget.onLongPress,
+      child: AnimatedScale(
+        scale: _isPressed ? widget.scaleDown : 1.0,
+        duration: widget.duration,
+        curve: Curves.easeInOut,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+/// ----------------------------------------------------------------------------
+/// Shimmer / Skeleton Animation for Loading States
+/// ----------------------------------------------------------------------------
+class ShimmerLoadingBox extends StatefulWidget {
+  final double width;
+  final double height;
+  final double borderRadius;
+  final Color? baseColor;
+  final Color? highlightColor;
+
+  const ShimmerLoadingBox({
+    super.key,
+    required this.width,
+    required this.height,
+    this.borderRadius = 8,
+    this.baseColor,
+    this.highlightColor,
+  });
+
+  @override
+  State<ShimmerLoadingBox> createState() => _ShimmerLoadingBoxState();
+}
+
+class _ShimmerLoadingBoxState extends State<ShimmerLoadingBox>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _shimmerController;
+
+  @override
+  void initState() {
+    super.initState();
+    _shimmerController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1400),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _shimmerController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final base = widget.baseColor ?? (isDark ? Colors.grey.shade800 : Colors.grey.shade300);
+    final highlight = widget.highlightColor ??
+        (isDark ? Colors.grey.shade700 : Colors.grey.shade100);
+
+    return AnimatedBuilder(
+      animation: _shimmerController,
+      builder: (context, child) {
+        return Container(
+          width: widget.width,
+          height: widget.height,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(widget.borderRadius),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [base, highlight, base],
+              stops: [
+                (_shimmerController.value - 0.3).clamp(0.0, 1.0),
+                _shimmerController.value,
+                (_shimmerController.value + 0.3).clamp(0.0, 1.0),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// ----------------------------------------------------------------------------
+/// Skeleton Placeholder for Conversation List Loading
+/// ----------------------------------------------------------------------------
+class ConversationListSkeleton extends StatelessWidget {
+  const ConversationListSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      itemCount: 8,
+      itemBuilder: (context, index) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Row(
+            children: [
+              const ShimmerLoadingBox(width: 48, height: 48, borderRadius: 24),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ShimmerLoadingBox(
+                      width: 120 + (index % 3) * 40,
+                      height: 14,
+                      borderRadius: 4,
+                    ),
+                    const SizedBox(height: 8),
+                    ShimmerLoadingBox(
+                      width: 180 + (index % 2) * 50,
+                      height: 11,
+                      borderRadius: 4,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              const ShimmerLoadingBox(width: 34, height: 10, borderRadius: 4),
+            ],
+          ),
+        );
+      },
+    );
+  }
 }
 
 /// ----------------------------------------------------------------------------
@@ -309,3 +550,4 @@ class _NotificationWidgetState extends State<_NotificationWidget>
     );
   }
 }
+

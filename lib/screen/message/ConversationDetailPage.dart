@@ -48,6 +48,80 @@ class ConversationDetailPage extends StatefulWidget {
 class _ConversationDetailPageState extends State<ConversationDetailPage> {
   bool _isMuted = false;
 
+  void _showEditTitleDialog(ConversationResponse conversation) {
+    final controller = TextEditingController(text: conversation.name ?? widget.chatName);
+
+    AnimatedDialog.show(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.edit_rounded, color: Colors.pinkAccent),
+            SizedBox(width: 8),
+            Text("Edit Chat Title"),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: controller,
+              autofocus: true,
+              textCapitalization: TextCapitalization.words,
+              decoration: InputDecoration(
+                hintText: "Conversation title",
+                filled: true,
+                fillColor: Colors.pink.withValues(alpha: 0.05),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Colors.pinkAccent, width: 1.5),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.pinkAccent,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () async {
+              final newTitle = controller.text.trim();
+              if (newTitle.isEmpty) return;
+              Navigator.pop(ctx);
+
+              final authProvider = context.read<AuthProvider>();
+              final convoProvider = context.read<ConversationProvider>();
+              final success = await convoProvider.updateConversation(
+                authProvider,
+                widget.conversationId,
+                name: newTitle,
+              );
+
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(success ? "Conversation renamed successfully" : "Failed to update title"),
+                    backgroundColor: success ? Colors.pinkAccent : Colors.redAccent,
+                  ),
+                );
+              }
+            },
+            child: const Text("Save", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _openAddMembersDialog(ConversationResponse conversation) {
     showDialog(
       context: context,
@@ -298,6 +372,19 @@ class _ConversationDetailPageState extends State<ConversationDetailPage> {
                       // Group Info / Description Card
                       _buildSectionCard(
                         children: [
+                          ListTile(
+                            leading: const Icon(Icons.edit_outlined, color: Colors.pinkAccent),
+                            title: const Text("Chat Title"),
+                            subtitle: Text(
+                              conversation.name?.isNotEmpty == true
+                                  ? conversation.name!
+                                  : widget.chatName,
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            trailing: const Icon(Icons.mode_edit_outline_rounded, size: 20, color: Colors.pinkAccent),
+                            onTap: () => _showEditTitleDialog(conversation),
+                          ),
+                          const Divider(height: 1, indent: 56),
                           if (widget.isGroup) ...[
                             ListTile(
                               leading: const Icon(Icons.info_outline, color: Colors.pinkAccent),
