@@ -4,11 +4,12 @@ import 'package:provider/provider.dart';
 import 'package:love_in_chat/model/emun/MessageType.dart' as app_msg;
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
+import 'package:love_in_chat/service/CallRingtoneService.dart';
 import 'package:love_in_chat/service/CallSignalingService.dart';
 import 'CallScreen.dart';
 
 /// Ringing / incoming-call overlay shown to the callee.
-class IncomingCallScreen extends StatelessWidget {
+class IncomingCallScreen extends StatefulWidget {
   final Map<String, dynamic> offer;
   final String callerName;
   final CallSignalingService signalingService;
@@ -21,6 +22,26 @@ class IncomingCallScreen extends StatelessWidget {
   });
 
   bool get _isVideo => offer['callType']?.toString().toUpperCase() == 'VIDEO';
+
+  @override
+  State<IncomingCallScreen> createState() => _IncomingCallScreenState();
+}
+
+class _IncomingCallScreenState extends State<IncomingCallScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Play ringtone as soon as this screen is shown.
+    CallRingtoneService.playRingtone();
+  }
+
+  @override
+  void dispose() {
+    CallRingtoneService.stop();
+    super.dispose();
+  }
+
+  bool get _isVideo => widget._isVideo;
 
   @override
   Widget build(BuildContext context) {
@@ -68,9 +89,9 @@ class IncomingCallScreen extends StatelessWidget {
                     label: 'Decline',
                     color: Colors.redAccent,
                     onTap: () async {
-                      signalingService.rejectCall(offer);
-                      // Send a "missed call" message into the conversation.
-                      final convId = offer['conversationId']?.toString() ?? '';
+                      CallRingtoneService.stop();
+                      widget.signalingService.rejectCall(widget.offer);
+                      final convId = widget.offer['conversationId']?.toString() ?? '';
                       if (convId.isNotEmpty) {
                         try {
                           final auth = context.read<AuthProvider>();
@@ -91,15 +112,16 @@ class IncomingCallScreen extends StatelessWidget {
                     label: 'Accept',
                     color: Colors.green,
                     onTap: () {
+                      CallRingtoneService.stop();
                       Navigator.of(context).pushReplacement(
                         MaterialPageRoute(
                           builder: (_) => CallScreen(
-                            remoteUserId:   offer['fromUserId']?.toString() ?? '',
-                            remoteName:     callerName,
-                            conversationId: offer['conversationId']?.toString() ?? '',
+                            remoteUserId:   widget.offer['fromUserId']?.toString() ?? '',
+                            remoteName:     widget.callerName,
+                            conversationId: widget.offer['conversationId']?.toString() ?? '',
                             isVideo:        _isVideo,
-                            incomingOffer:  offer,
-                            signalingService: signalingService,
+                            incomingOffer:  widget.offer,
+                            signalingService: widget.signalingService,
                           ),
                         ),
                       );

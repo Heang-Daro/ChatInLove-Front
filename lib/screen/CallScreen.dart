@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:love_in_chat/model/emun/MessageType.dart' as app_msg;
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
+import 'package:love_in_chat/service/CallRingtoneService.dart';
 import 'package:love_in_chat/service/CallSignalingService.dart';
 
 /// Full-screen in-call screen.
@@ -97,11 +98,13 @@ class _CallScreenState extends State<CallScreen> {
     await _remoteRenderer.initialize();
 
     // Force audio to loudspeaker immediately on call start.
-    // On Android, WebRTC defaults to the earpiece — this overrides that.
-    // On iOS the AVAudioSession category handles it via flutter_webrtc.
     if (!widget.isVideo) {
-      // Voice call → speaker on by default so the other person can be heard.
       await Helper.setSpeakerphoneOn(true);
+    }
+
+    // Play ringback for the caller while waiting for answer.
+    if (widget.incomingOffer == null) {
+      CallRingtoneService.playRingback();
     }
 
     final sig = widget.signalingService;
@@ -112,6 +115,8 @@ class _CallScreenState extends State<CallScreen> {
         _connected = true;
         _ringing   = false;
       });
+      // Stop ringback as soon as remote stream arrives (call answered).
+      CallRingtoneService.stop();
       _startTimer();
     });
 
@@ -198,7 +203,8 @@ class _CallScreenState extends State<CallScreen> {
     _endedSub.cancel();
     _localRenderer.dispose();
     _remoteRenderer.dispose();
-    // Restore default audio route when leaving the call screen.
+    // Stop ringtone/ringback and restore default audio route.
+    CallRingtoneService.stop();
     Helper.setSpeakerphoneOn(false).catchError((_) {});
     super.dispose();
   }

@@ -8,6 +8,7 @@ import 'package:love_in_chat/model/emun/MessageType.dart' as app_msg;
 import 'package:love_in_chat/model/Response/ConversationMemberResponse.dart';
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
+import 'package:love_in_chat/service/CallRingtoneService.dart';
 import 'package:love_in_chat/service/GroupCallSignalingService.dart';
 import 'package:love_in_chat/service/StompService.dart';
 
@@ -69,6 +70,8 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
       setState(() {});
       if (!_joined && _sig.participants.any((p) => p.connected)) {
         _joined = true;
+        // Stop ringback/ringtone once first participant connects.
+        CallRingtoneService.stop();
         _startTimer();
       }
     });
@@ -82,13 +85,15 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
 
   Future<void> _start() async {
     if (widget.callerUserId != null) {
-      // Callee path: join an existing call.
+      // Callee path: play ringtone then join existing call.
+      CallRingtoneService.playRingtone();
       await _sig.joinExistingCall(
         callerUserId:   widget.callerUserId!,
         callerUsername: widget.callerUsername ?? widget.callerUserId!,
       );
     } else {
-      // Caller path: start the call and broadcast GROUP_CALL_STARTED.
+      // Caller path: play ringback and broadcast GROUP_CALL_STARTED.
+      CallRingtoneService.playRingback();
       await _sig.startCall();
     }
   }
@@ -128,6 +133,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     _localSub.cancel();
     _localRenderer.dispose();
     _timer?.cancel();
+    CallRingtoneService.stop();
     super.dispose();
   }
 
