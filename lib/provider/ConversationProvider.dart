@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:love_in_chat/model/Response/ConversationResponse.dart';
 import 'package:love_in_chat/model/Response/MessageResponse.dart';
 import 'package:love_in_chat/model/emun/ConversationStatus.dart';
+import 'package:love_in_chat/model/emun/ConversationType.dart';
 import 'package:love_in_chat/model/emun/MessageType.dart';
 
 import '../api/api.dart';
