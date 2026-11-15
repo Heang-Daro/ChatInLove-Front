@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -16,6 +17,7 @@ import '../service/ChatAppearanceService.dart';
 import 'message/ConversationBody.dart';
 import 'message/ConversationHeader.dart';
 import 'message/ConversationInput.dart';
+import 'message/message_shortcuts.dart';
 
 class ConversationPage extends StatefulWidget {
   final String conversationId;
@@ -36,15 +38,20 @@ class ConversationPage extends StatefulWidget {
 }
 
 class _ConversationPageState extends State<ConversationPage> {
-  final TextEditingController _messageController = TextEditingController();
+  // Use ShortcutTextController so valid #keys are highlighted while typing.
+  final ShortcutTextController _messageController = ShortcutTextController();
   final ImagePicker _picker = ImagePicker();
   final AudioRecorder _audioRecorder = AudioRecorder();
 
   bool _isRecording = false;
   DateTime? _lastTypingEventTime;
 
+  // Live amplitude stream for the waveform in the input bar.
+  StreamController<double>? _amplitudeController;
+  Timer? _amplitudeTicker;
+
   // ── #loop macro state ─────────────────────────────────────────────────────
-  bool _loopRunning = false;
+  bool _loopRunning   = false;
   bool _loopCancelled = false;
 
   @override
@@ -63,7 +70,6 @@ class _ConversationPageState extends State<ConversationPage> {
       conversations.sendTyping(widget.conversationId, isTyping: false);
       return;
     }
-
     final now = DateTime.now();
     if (_lastTypingEventTime == null ||
         now.difference(_lastTypingEventTime!) > const Duration(seconds: 2)) {
@@ -77,87 +83,92 @@ class _ConversationPageState extends State<ConversationPage> {
     _messageController.removeListener(_onTextChanged);
     _messageController.dispose();
     _audioRecorder.dispose();
+    _amplitudeTicker?.cancel();
+    _amplitudeController?.close();
     super.dispose();
   }
 
+  // ── Send message — full if/else chain ─────────────────────────────────────
   Future<void> _sendMessage() async {
-    final text = _messageController.text.trim();
-    if (text.isEmpty) return;
+    final raw = _messageController.text.trim();
+    if (raw.isEmpty) return;
 
-    // ── #loop macro interception ──────────────────────────────────────────
-    // Syntax: #loop [count] <message>
-    //   #loop Hello               → sends "Hello" 100 times
-    //   #loop 50 Hello            → sends "Hello" 50 times
-    //   #loop 200 Hello           → capped to 100, sends "Hello" 100 times
+    // ── Branch 1: #loop macro ─────────────────────────────────────────────
     final loopMatch = RegExp(
       r'^#loop\s+(?:(\d+)\s+)?(.+)$',
       caseSensitive: false,
-    ).firstMatch(text);
+    ).firstMatch(raw);
 
     if (loopMatch != null) {
-      _messageController.clear(); // remove #loop from input immediately
+      _messageController.clear();
 
       if (_loopRunning) {
-        // A loop is already in progress — cancel it.
+        // A loop is already running — cancel it instead of starting a new one.
         _loopCancelled = true;
         return;
       }
 
       final requestedCount = int.tryParse(loopMatch.group(1) ?? '') ?? 100;
       final count   = requestedCount.clamp(1, 100);
-      final message = loopMatch.group(2)!.trim();
+      // Apply any nested #shortcuts inside the loop message before repeating.
+      final message = MessageShortcuts.apply(loopMatch.group(2)!.trim());
 
       if (message.isEmpty) return;
 
       _loopRunning   = true;
       _loopCancelled = false;
 
-      // Show a persistent snackbar so the user can cancel.
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: StatefulBuilder(
-              builder: (ctx, setSnack) => Row(children: [
-                Expanded(
-                  child: Text(
-                    'Sending "$message" × $count…',
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                TextButton(
-                  onPressed: () {
-                    _loopCancelled = true;
-                    ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
-                  },
-                  child: const Text('Cancel',
-                      style: TextStyle(color: Colors.white)),
-                ),
-              ]),
-            ),
-            duration: Duration(seconds: count * 2), // generous upper bound
-            backgroundColor: Colors.pinkAccent,
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: StatefulBuilder(
+            builder: (ctx, _) => Row(children: [
+              Expanded(
+                child: Text('Sending "$message" × $count…',
+                    overflow: TextOverflow.ellipsis),
+              ),
+              TextButton(
+                onPressed: () {
+                  _loopCancelled = true;
+                  ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
+                },
+                child: const Text('Cancel', style: TextStyle(color: Colors.white)),
+              ),
+            ]),
           ),
-        );
+          duration: Duration(seconds: count * 2),
+          backgroundColor: Colors.pinkAccent,
+        ));
       }
 
       _runLoop(message, count);
-      return;
+
+    // ── Branch 2: other #shortcuts (bold, italic, code, upper, lower …) ──
+    } else if (raw.contains('#') && MessageShortcuts.apply(raw) != raw) {
+      // The text contains at least one valid #key{} shortcut.
+      final converted = MessageShortcuts.apply(raw);
+      _messageController.clear();
+      context.read<ConversationProvider>().sendTyping(widget.conversationId, isTyping: false);
+      await context.read<ConversationProvider>().sendMessage(
+        context.read<AuthProvider>(),
+        widget.conversationId,
+        converted,
+      );
+
+    // ── Branch 3: plain text (most common path) ───────────────────────────
+    } else {
+      _messageController.clear();
+      context.read<ConversationProvider>().sendTyping(widget.conversationId, isTyping: false);
+      await context.read<ConversationProvider>().sendMessage(
+        context.read<AuthProvider>(),
+        widget.conversationId,
+        raw,
+      );
     }
-    // ── Normal send ───────────────────────────────────────────────────────
-    _messageController.clear();
-    final conversations = context.read<ConversationProvider>();
-    conversations.sendTyping(widget.conversationId, isTyping: false);
-    await conversations.sendMessage(
-      context.read<AuthProvider>(),
-      widget.conversationId,
-      text,
-    );
   }
 
-  /// Sends [message] up to [count] times with a 150 ms gap.
-  /// Runs entirely in the background — the UI stays responsive.
+  // ── Loop runner ───────────────────────────────────────────────────────────
   Future<void> _runLoop(String message, int count) async {
-    final auth  = context.read<AuthProvider>();
+    final auth   = context.read<AuthProvider>();
     final convos = context.read<ConversationProvider>();
     int sent = 0;
 
@@ -173,21 +184,21 @@ class _ConversationPageState extends State<ConversationPage> {
     _loopCancelled = false;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text('Sent "$message" $sent time${sent == 1 ? '' : 's'}.'),
-          duration: const Duration(seconds: 3),
-          backgroundColor: Colors.pinkAccent,
-        ),
-      );
+      ..showSnackBar(SnackBar(
+        content: Text('Sent "$message" $sent time${sent == 1 ? '' : 's'}.'),
+        duration: const Duration(seconds: 3),
+        backgroundColor: Colors.pinkAccent,
+      ));
   }
 
+  // ── Like button ───────────────────────────────────────────────────────────
   Future<void> _sendLike() => context.read<ConversationProvider>().sendMessage(
         context.read<AuthProvider>(),
         widget.conversationId,
         '👍',
       );
 
+  // ── Media helpers ─────────────────────────────────────────────────────────
   Future<void> _pickMedia({
     required ImageSource source,
     required MessageType type,
@@ -216,18 +227,38 @@ class _ConversationPageState extends State<ConversationPage> {
     );
   }
 
+  // ── Voice recording ───────────────────────────────────────────────────────
   Future<void> _startRecording() async {
     if (!await _audioRecorder.hasPermission()) return;
+
     String? path;
     if (!kIsWeb) {
       final dir = await getTemporaryDirectory();
       path = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
     }
     await _audioRecorder.start(const RecordConfig(), path: path ?? '');
+
+    // Stream amplitude values for the live waveform.
+    _amplitudeController = StreamController<double>.broadcast();
+    _amplitudeTicker = Timer.periodic(const Duration(milliseconds: 100), (_) async {
+      try {
+        final amp = await _audioRecorder.getAmplitude();
+        if (!(_amplitudeController?.isClosed ?? true)) {
+          // Normalize dBFS (-160…0) → 0…1
+          final norm = ((amp.current + 160) / 160).clamp(0.0, 1.0);
+          _amplitudeController?.add(norm);
+        }
+      } catch (_) {}
+    });
+
     if (mounted) setState(() => _isRecording = true);
   }
 
   Future<void> _stopAndSendRecording() async {
+    _amplitudeTicker?.cancel();
+    _amplitudeController?.close();
+    _amplitudeController = null;
+
     final path = await _audioRecorder.stop();
     if (mounted) setState(() => _isRecording = false);
     if (path == null) return;
@@ -255,10 +286,14 @@ class _ConversationPageState extends State<ConversationPage> {
   }
 
   Future<void> _cancelRecording() async {
+    _amplitudeTicker?.cancel();
+    _amplitudeController?.close();
+    _amplitudeController = null;
     await _audioRecorder.stop();
     if (mounted) setState(() => _isRecording = false);
   }
 
+  // ── Build ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<Color>(
@@ -281,13 +316,18 @@ class _ConversationPageState extends State<ConversationPage> {
                 onSend: _sendMessage,
                 onLikePressed: _sendLike,
                 isRecording: _isRecording,
+                amplitudeStream: _amplitudeController?.stream,
                 onStartRecording: _startRecording,
                 onStopAndSendRecording: _stopAndSendRecording,
                 onCancelRecording: _cancelRecording,
-                onSendImage: () => _pickMedia(source: ImageSource.gallery, type: MessageType.IMAGE),
-                onSendCamera: () => _pickMedia(source: ImageSource.camera, type: MessageType.IMAGE),
-                onSendVideo: () => _pickMedia(source: ImageSource.gallery, type: MessageType.VIDEO),
-                onSendCameraVideo: () => _pickMedia(source: ImageSource.camera, type: MessageType.VIDEO),
+                onSendImage: () => _pickMedia(
+                    source: ImageSource.gallery, type: MessageType.IMAGE),
+                onSendCamera: () => _pickMedia(
+                    source: ImageSource.camera, type: MessageType.IMAGE),
+                onSendVideo: () => _pickMedia(
+                    source: ImageSource.gallery, type: MessageType.VIDEO),
+                onSendCameraVideo: () => _pickMedia(
+                    source: ImageSource.camera, type: MessageType.VIDEO),
               ),
             ],
           ),
