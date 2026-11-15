@@ -6,6 +6,7 @@ import 'package:love_in_chat/model/Response/UserResponse.dart';
 import 'package:love_in_chat/model/emun/ConversationType.dart';
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
+import '../../util/AnimatedComponents.dart';
 
 class ConversationDetailPage extends StatefulWidget {
   final String conversationId;
