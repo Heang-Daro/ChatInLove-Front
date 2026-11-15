@@ -124,7 +124,7 @@ class _ConversationInputState extends State<ConversationInput>
 
   // ───────────────────────── "#" shortcuts ─────────────────────────
 
-  static final RegExp _hashToken = RegExp(r'(?:^|(?<=[\s{]))#([A-Za-z]*)\d*$');
+  static final RegExp _hashToken = RegExp(r'(?:^|(?<=[\s{(]))#([A-Za-z]*)\d*$');
 
   void _onTextChanged() {
     final c = widget.controller;
@@ -139,7 +139,7 @@ class _ConversationInputState extends State<ConversationInput>
       final m = _hashToken.firstMatch(before);
       if (m != null) {
         q = m[1]!;
-        start = m.start;
+        start = before.lastIndexOf('#');
       }
     }
 
@@ -157,9 +157,13 @@ class _ConversationInputState extends State<ConversationInput>
     final end = c.selection.baseOffset;
     if (_tokenStart < 0 || end < _tokenStart) return;
     final t = k.template;
+    final newText = c.text.replaceRange(_tokenStart, end, t);
+    final closingIndex = _tokenStart + t.indexOf('}');
+    final cursorOffset = closingIndex >= 0 ? closingIndex : _tokenStart + t.length;
+
     c.value = TextEditingValue(
-      text: c.text.replaceRange(_tokenStart, end, t),
-      selection: TextSelection.collapsed(offset: _tokenStart + t.length - 1),
+      text: newText,
+      selection: TextSelection.collapsed(offset: cursorOffset.clamp(0, newText.length)),
     );
   }
 
@@ -184,11 +188,12 @@ class _ConversationInputState extends State<ConversationInput>
       key: const ValueKey('shortcutPanel'),
       child: Container(
         width: double.infinity,
-        constraints: const BoxConstraints(maxHeight: 230),
+        constraints: const BoxConstraints(maxHeight: 240),
         margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
         decoration: BoxDecoration(
           color: _a(accent, isDark ? 0.12 : 0.06),
           borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: accent.withValues(alpha: 0.2)),
         ),
         child: matches.isEmpty
             ? Padding(
@@ -208,14 +213,26 @@ class _ConversationInputState extends State<ConversationInput>
                 children: [
                   Padding(
                     padding: const EdgeInsets.fromLTRB(14, 6, 14, 2),
-                    child: Text(
-                      exact != null
-                          ? '✓ #${exact.key} is a shortcut key'
-                          : 'Shortcut keys',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: accent),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          exact != null
+                              ? '✓ #${exact.key} is a shortcut key'
+                              : 'Shortcut suggestions',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: accent),
+                        ),
+                        Text(
+                          '${matches.length} matches',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: isDark ? Colors.grey.shade400 : Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   for (final k in matches)
