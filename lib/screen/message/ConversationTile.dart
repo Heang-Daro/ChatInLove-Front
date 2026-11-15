@@ -46,11 +46,55 @@ class ConversationTile extends StatelessWidget {
     final rest = parts.length > 1 ? parts.sublist(1).join(':') : '';
     final isVideo = kind == 'VIDEO';
     switch (rest) {
-      case 'MISSED':    return isVideo ? '📹 Missed video call' : '📞 Missed call';
-      case 'REJECTED':  return isVideo ? '📹 Declined video call' : '📞 Declined call';
-      case 'CANCELLED': return isVideo ? '📹 Cancelled video call' : '📞 Cancelled call';
-      default:          return isVideo ? '📹 Video call · $rest' : '📞 Voice call · $rest';
+      case 'MISSED':    return isVideo ? 'Missed video call' : 'Missed call';
+      case 'REJECTED':  return isVideo ? 'Declined video call' : 'Declined call';
+      case 'CANCELLED': return isVideo ? 'Cancelled video call' : 'Cancelled call';
+      default:          return isVideo ? 'Video call · $rest' : 'Voice call · $rest';
     }
+  }
+
+  /// Icon for CALL messages in the tile subtitle.
+  IconData _callIcon(String content) {
+    final rest = content.contains(':') ? content.split(':').sublist(1).join(':') : '';
+    final isVideo = content.toUpperCase().startsWith('VIDEO');
+    if (rest == 'MISSED' || rest == 'REJECTED' || rest == 'CANCELLED') {
+      return Icons.phone_missed_rounded;
+    }
+    return isVideo ? Icons.videocam_rounded : Icons.call_rounded;
+  }
+
+  /// Avatar for the tile — shows profile image when available.
+  Widget _buildAvatar(bool isGroup, String currentUserId) {
+    if (isGroup) {
+      // Group: use group icon (could later support group images)
+      return CircleAvatar(
+        backgroundColor: Colors.pinkAccent,
+        child: const Icon(Icons.group, color: Colors.white),
+      );
+    }
+    // Private: find the other member and use their profileImageUrl.
+    final other = chat.members
+        .where((m) => m.userId.trim() != currentUserId.trim() && m.leftAt == null)
+        .firstOrNull;
+    final avatarUrl = other?.profileImageUrl;
+    final initials = (other?.username.isNotEmpty == true)
+        ? other!.username[0].toUpperCase()
+        : '?';
+
+    if (avatarUrl != null && avatarUrl.isNotEmpty) {
+      return CircleAvatar(
+        backgroundColor: Colors.pinkAccent.withValues(alpha: 0.15),
+        backgroundImage: NetworkImage(avatarUrl),
+        onBackgroundImageError: (_, __) {},
+        child: null,
+      );
+    }
+    return CircleAvatar(
+      backgroundColor: Colors.pinkAccent,
+      child: Text(initials,
+          style: const TextStyle(
+              color: Colors.white, fontWeight: FontWeight.bold)),
+    );
   }
 
   IconData? _getMessageIcon(MessageType type) {
@@ -64,7 +108,7 @@ class ConversationTile extends StatelessWidget {
       case MessageType.FILE:
         return Icons.insert_drive_file;
       case MessageType.CALL:
-        return null; // emoji icon is embedded in the label text
+        return null; // handled separately with _callIcon()
       case MessageType.SYSTEM:
         return Icons.info_outline;
       case MessageType.TEXT:
@@ -117,7 +161,9 @@ class ConversationTile extends StatelessWidget {
       );
     }
 
-    final IconData? iconData = _getMessageIcon(lastMsg.type);
+    final IconData? iconData = lastMsg.type == MessageType.CALL
+        ? _callIcon(lastMsg.content)
+        : _getMessageIcon(lastMsg.type);
     final String label = _getMessageLabel(lastMsg);
 
     return Row(
@@ -188,10 +234,7 @@ class ConversationTile extends StatelessWidget {
 
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      leading: CircleAvatar(
-        backgroundColor: Colors.pinkAccent,
-        child: Icon(avatarIcon, color: Colors.white),
-      ),
+      leading: _buildAvatar(isGroup, currentUserId),
       title: Text(
         chatName,
         style: TextStyle(

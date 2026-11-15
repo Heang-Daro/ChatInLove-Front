@@ -22,6 +22,8 @@ class ConversationProvider extends ChangeNotifier {
   final String baseUrl = "${REST_URL}/api/conversations";
   final StompService _stompService = StompService();
   CallSignalingService? _callSignaling;
+  StreamSubscription? _incomingCallSub; // guard: cancelled on reconnect
+  bool _callInProgress = false;         // guard: prevent duplicate popups
 
   /// Set by HomeScreen after STOMP connects. Exposes the signaling service to
   /// the UI so the call buttons in ConversationPage can use it.
@@ -271,15 +273,22 @@ class ConversationProvider extends ChangeNotifier {
       onMessageReceived: (message) {
         handleIncomingPrivateMessage(authProvider, message);
       },
-      onTypingReceived: (typingData) {
-        // Global or fallback typing listener if needed
-      },
+      onTypingReceived: (typingData) {},
     );
-    // Subscribe to WebRTC signaling after STOMP connects.
+    // Cancel any previous subscription before creating a new one so
+    // reconnections don't stack duplicate listeners (the call-loop bug).
+    _incomingCallSub?.cancel();
     callSignaling.listenForIncoming();
-    callSignaling.onIncomingCall.stream.listen((offer) {
+    _incomingCallSub = callSignaling.onIncomingCall.stream.listen((offer) {
+      if (_callInProgress) return; // already handling a call — drop duplicate
+      _callInProgress = true;
       onIncomingCall?.call(offer);
     });
+  }
+
+  /// Called by the UI when a call is fully dismissed (answered, rejected, or ended).
+  void markCallEnded() {
+    _callInProgress = false;
   }
 
   void subscribeToActiveConversation(String conversationId) {
@@ -1118,6 +1127,9 @@ class ConversationProvider extends ChangeNotifier {
     _conversationCacheTimer?.cancel();
     _messageCacheTimer?.cancel();
     authProviderUserId = null;
+    _incomingCallSub?.cancel();
+    _incomingCallSub = null;
+    _callInProgress  = false;
     _stompService.disconnect();
     _callSignaling?.dispose();
     _callSignaling = null;

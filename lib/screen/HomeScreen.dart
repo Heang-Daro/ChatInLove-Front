@@ -92,7 +92,7 @@ class _HomeScreenState extends State<HomeScreen> {
               members:        members,
               localUserId:    localUserId,
             ),
-          ));
+          )).whenComplete(() => conversationProvider.markCallEnded());
         } else {
           // ── Incoming 1-to-1 call ─────────────────────────────────────────
           String callerName = fromId;
@@ -108,7 +108,7 @@ class _HomeScreenState extends State<HomeScreen> {
               callerName: callerName,
               signalingService: conversationProvider.callSignaling,
             ),
-          ));
+          )).whenComplete(() => conversationProvider.markCallEnded());
         }
       };
       try {

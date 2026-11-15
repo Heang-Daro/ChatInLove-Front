@@ -28,6 +28,15 @@
   <meta name="twitter:title" content="In Love - Real-time Chat Application">
   <meta name="twitter:description" content="In Love is a real-time messaging application for fast, seamless, and secure communication.">
   <meta name="twitter:image" content="https://chat-in-love-front.vercel.app/icons/og-image.png">
+
+  <!-- Google Noto Color Emoji — ensures emoji render on all browsers/platforms -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Color+Emoji&display=swap" rel="stylesheet">
+  <style>
+    /* Apply emoji font as fallback so Flutter web canvaskit text shows colour emoji */
+    * { font-family: inherit, 'Noto Color Emoji', sans-serif; }
+  </style>
   <meta name="twitter:image:alt" content="In Love App Logo">
 
   <meta name="mobile-web-app-capable" content="yes">
