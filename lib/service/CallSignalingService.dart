@@ -203,9 +203,9 @@ class CallSignalingService {
     bool video = false,
   }) async {
     // Store server-assigned session ID for accept/reject.
-    _callSessionId = msg['callSessionId']?.toString();
-    _remoteUserId  = msg['fromUserId']?.toString();
-    _conversationId = msg['conversationId']?.toString();
+    _callSessionId  = offerMsg['callSessionId']?.toString();
+    _remoteUserId   = offerMsg['fromUserId']?.toString();
+    _conversationId = offerMsg['conversationId']?.toString();
     _isOffer        = false;
 
     _localStream = await _getUserMedia(video: video);

@@ -3,25 +3,20 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'message_shortcuts.dart';
 
 /// Chat input bar.
 ///  - Voice note : tap the mic to START recording, tap the send button (or the
 ///                 mic again) to STOP and send, tap the bin to cancel.
-///                 Click-based so it works on web as well as on mobile
-///                 (hold-to-record does not work with a mouse).
-///  - Attach     : Telegram-style grid sheet + location sheet
-///                 (current / live / pick on map).
+///  - Attach     : Telegram-style grid sheet + location sheet.
+///  - Shortcuts  : type '#' to get suggestions (#bold{..}, #italic{..},
+///                 #loop3{..} ...). Valid keys are highlighted (use a
+///                 ShortcutTextController) and converted when sending.
 class ConversationInput extends StatefulWidget {
   final TextEditingController controller;
   final VoidCallback onSend;
   final VoidCallback? onLikePressed;
-
-  /// Optional. UI state is handled internally; if the parent sets this back
-  /// to false while recording (e.g. recorder error), the UI resets.
   final bool isRecording;
-
-  /// Optional 0..1 amplitude stream from your recorder for a real waveform.
-  /// If null, a simulated waveform is shown.
   final Stream<double>? amplitudeStream;
 
   // Voice recording callbacks
@@ -30,14 +25,14 @@ class ConversationInput extends StatefulWidget {
   final Future<void> Function()? onCancelRecording;
 
   // Media attachment callbacks
-  final VoidCallback? onSendImage; // Photo from gallery
-  final VoidCallback? onSendCamera; // Take photo with the camera
-  final VoidCallback? onSendVideo; // Video from gallery
+  final VoidCallback? onSendImage;   // Photo from gallery
+  final VoidCallback? onSendCamera;  // Take photo with the camera
+  final VoidCallback? onSendVideo;   // Video from gallery
   final VoidCallback? onSendCameraVideo; // Record video with the camera
   final VoidCallback? onSendFile;
 
   // Location callbacks (Telegram style)
-  final VoidCallback? onSendLocation; // send current location
+  final VoidCallback? onSendLocation;             // send current location
   final ValueChanged<Duration>? onSendLiveLocation; // 15m / 1h / 8h
   final VoidCallback? onPickLocationOnMap;
 
@@ -75,7 +70,11 @@ class _ConversationInputState extends State<ConversationInput>
 
   bool _hasText = false;
 
-  // Recording state (click based: tap mic to start, tap stop to send)
+  // "#" shortcut detection
+  String? _query;    // text after '#', null when no '#' token at the cursor
+  int _tokenStart = -1; // index of '#'
+
+  // Recording state
   bool _recording = false;
   final Stopwatch _stopwatch = Stopwatch();
   final ValueNotifier<Duration> _elapsed = ValueNotifier(Duration.zero);
@@ -96,6 +95,7 @@ class _ConversationInputState extends State<ConversationInput>
       vsync: this,
       duration: const Duration(milliseconds: 800),
     )..repeat(reverse: true);
+
     _pulseAnimation =
         Tween<double>(begin: 0.3, end: 1.0).animate(_pulseController);
   }
@@ -107,7 +107,6 @@ class _ConversationInputState extends State<ConversationInput>
       oldWidget.controller.removeListener(_onTextChanged);
       widget.controller.addListener(_onTextChanged);
     }
-    // Parent stopped recording externally (error, permission denied...)
     if (oldWidget.isRecording && !widget.isRecording && _recording) {
       _resetRecordingState();
     }
@@ -123,18 +122,130 @@ class _ConversationInputState extends State<ConversationInput>
     super.dispose();
   }
 
+  // ───────────────────────── "#" shortcuts ─────────────────────────
+
+  static final RegExp _hashToken = RegExp(r'(?:^|(?<=[\s{]))#([A-Za-z]*)\d*$');
+
   void _onTextChanged() {
-    final hasTextNow = widget.controller.text.trim().isNotEmpty;
-    if (hasTextNow != _hasText) setState(() => _hasText = hasTextNow);
+    final c = widget.controller;
+    final hasTextNow = c.text.trim().isNotEmpty;
+
+    String? q;
+    var start = -1;
+
+    final sel = c.selection;
+    if (sel.isValid && sel.isCollapsed && sel.baseOffset <= c.text.length) {
+      final before = c.text.substring(0, sel.baseOffset);
+      final m = _hashToken.firstMatch(before);
+      if (m != null) {
+        q = m[1]!;
+        start = m.start;
+      }
+    }
+
+    if (hasTextNow != _hasText || q != _query || start != _tokenStart) {
+      setState(() {
+        _hasText = hasTextNow;
+        _query = q;
+        _tokenStart = start;
+      });
+    }
   }
 
-  // ───────────────────────── Voice recording (click to record) ───────────────
+  void _insertShortcut(ShortcutKey k) {
+    final c = widget.controller;
+    final end = c.selection.baseOffset;
+    if (_tokenStart < 0 || end < _tokenStart) return;
+    final t = k.template;
+    c.value = TextEditingValue(
+      text: c.text.replaceRange(_tokenStart, end, t),
+      selection: TextSelection.collapsed(offset: _tokenStart + t.length - 1),
+    );
+  }
+
+  /// Converts #shortcuts, then calls the parent's onSend.
+  void _handleSend() {
+    final raw = widget.controller.text;
+    final out = MessageShortcuts.apply(raw);
+    if (out != raw) widget.controller.text = out;
+    widget.onSend();
+  }
+
+  Widget _buildShortcutPanel(bool isDark, Color accent) {
+    if (_query == null || _recording) {
+      return const SizedBox.shrink(key: ValueKey('noPanel'));
+    }
+
+    final q = _query!;
+    final matches = MessageShortcuts.search(q);
+    final exact = q.isEmpty ? null : MessageShortcuts.find(q);
+
+    return TextFieldTapRegion(
+      key: const ValueKey('shortcutPanel'),
+      child: Container(
+        width: double.infinity,
+        constraints: const BoxConstraints(maxHeight: 230),
+        margin: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+        decoration: BoxDecoration(
+          color: _a(accent, isDark ? 0.12 : 0.06),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: matches.isEmpty
+            ? Padding(
+                padding: const EdgeInsets.all(14),
+                child: Row(children: [
+                  const Icon(Icons.block_rounded, size: 18, color: Colors.red),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text('#$q is not a shortcut key',
+                        style: const TextStyle(color: Colors.red)),
+                  ),
+                ]),
+              )
+            : ListView(
+                shrinkWrap: true,
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 6, 14, 2),
+                    child: Text(
+                      exact != null
+                          ? '✓ #${exact.key} is a shortcut key'
+                          : 'Shortcut keys',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: accent),
+                    ),
+                  ),
+                  for (final k in matches)
+                    ListTile(
+                      dense: true,
+                      leading: CircleAvatar(
+                        radius: 16,
+                        backgroundColor: accent,
+                        child: Icon(k.icon, size: 18, color: Colors.white),
+                      ),
+                      title: Text('#${k.key}',
+                          style: const TextStyle(fontWeight: FontWeight.w700)),
+                      subtitle: Text('${k.description}\n${k.example}'),
+                      isThreeLine: true,
+                      trailing: k.key == exact?.key
+                          ? Icon(Icons.check_circle_rounded, color: accent)
+                          : null,
+                      onTap: () => _insertShortcut(k),
+                    ),
+                ],
+              ),
+      ),
+    );
+  }
+
+  // ───────────────────────── Voice recording ─────────────────────────
 
   Future<void> _beginRecording() async {
     HapticFeedback.mediumImpact();
-    _stopwatch
-      ..reset()
-      ..start();
+    _stopwatch..reset()..start();
     _elapsed.value = Duration.zero;
     _ticker?.cancel();
     _ticker = Timer.periodic(const Duration(milliseconds: 200), (_) {
@@ -159,13 +270,11 @@ class _ConversationInputState extends State<ConversationInput>
     if (!_recording) return;
     final elapsed = _stopwatch.elapsed;
     _resetRecordingState();
-
     if (send && elapsed >= _minDuration) {
       HapticFeedback.lightImpact();
       await widget.onStopAndSendRecording?.call();
     } else {
       if (send && mounted) {
-        // Too short – discard and show a hint
         ScaffoldMessenger.maybeOf(context)
           ?..hideCurrentSnackBar()
           ..showSnackBar(const SnackBar(
@@ -183,9 +292,10 @@ class _ConversationInputState extends State<ConversationInput>
     return '$m:$s';
   }
 
-  // ───────────────────────── Attachments (Telegram) ─────────────────────────
+  // ───────────────────────── Attachments ─────────────────────────
 
-  Future<void> _showSheet(BuildContext context, Widget Function(BuildContext) b) {
+  Future<void> _showSheet(
+      BuildContext context, Widget Function(BuildContext) b) {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -199,20 +309,26 @@ class _ConversationInputState extends State<ConversationInput>
 
   void _showAttachmentOptions(BuildContext context) {
     final items = <_AttachItem>[
-      _AttachItem(Icons.photo_library_rounded, 'Gallery', const Color(0xFF2E9CEB),
-          widget.onSendImage),
-      _AttachItem(Icons.camera_alt_rounded, 'Camera', const Color(0xFFE5483D),
+      _AttachItem(Icons.photo_library_rounded, 'Gallery',
+          const Color(0xFF2E9CEB), widget.onSendImage),
+      _AttachItem(
+          Icons.camera_alt_rounded,
+          'Camera',
+          const Color(0xFFE5483D),
           widget.onSendCamera == null && widget.onSendCameraVideo == null
               ? null
               : () => _showCameraOptions(context)),
       _AttachItem(Icons.videocam_rounded, 'Video', const Color(0xFF8E5BD9),
           widget.onSendVideo),
-      _AttachItem(Icons.insert_drive_file_rounded, 'File', const Color(0xFFF59E0B),
-          widget.onSendFile),
-      _AttachItem(Icons.location_on_rounded, 'Location', const Color(0xFF34B35E),
+      _AttachItem(Icons.insert_drive_file_rounded, 'File',
+          const Color(0xFFF59E0B), widget.onSendFile),
+      _AttachItem(
+          Icons.location_on_rounded,
+          'Location',
+          const Color(0xFF34B35E),
           widget.onSendLocation == null &&
-              widget.onSendLiveLocation == null &&
-              widget.onPickLocationOnMap == null
+                  widget.onSendLiveLocation == null &&
+                  widget.onPickLocationOnMap == null
               ? null
               : () => _showLocationOptions(context)),
     ];
@@ -265,14 +381,13 @@ class _ConversationInputState extends State<ConversationInput>
             const SizedBox(height: 8),
             Text(item.label,
                 style:
-                const TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
+                    const TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
           ],
         ),
       ),
     );
   }
 
-  /// "Camera" opens a small sheet so the user picks photo or video capture.
   void _showCameraOptions(BuildContext context) {
     _showSheet(context, (ctx) {
       return SafeArea(
@@ -320,7 +435,6 @@ class _ConversationInputState extends State<ConversationInput>
       widget.onSendLocation?.call();
       return;
     }
-
     _showSheet(context, (ctx) {
       return SafeArea(
         child: Column(
@@ -425,17 +539,27 @@ class _ConversationInputState extends State<ConversationInput>
 
     return Container(
       color: Theme.of(context).cardColor,
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          child: AnimatedSwitcher(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedSize(
             duration: const Duration(milliseconds: 150),
-            child: _recording
-                ? _buildRecordingBar(accent)
-                : _buildMainRow(isDark, accent),
+            alignment: Alignment.bottomCenter,
+            child: _buildShortcutPanel(isDark, accent),
           ),
-        ),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 150),
+                child: _recording
+                    ? _buildRecordingBar(accent)
+                    : _buildMainRow(isDark, accent),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -459,51 +583,46 @@ class _ConversationInputState extends State<ConversationInput>
             minLines: 1,
             textCapitalization: TextCapitalization.sentences,
             decoration: InputDecoration(
-              hintText: 'Aa',
-              hintStyle: TextStyle(
-                  color: isDark ? Colors.grey[500] : Colors.grey),
+              hintText: 'Aa   (type # for shortcuts)',
+              hintStyle:
+                  TextStyle(color: isDark ? Colors.grey[500] : Colors.grey),
               filled: true,
               fillColor: _a(Colors.pink, isDark ? 0.1 : 0.05),
-              contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16, vertical: 10),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(20),
                 borderSide: BorderSide.none,
               ),
             ),
-            onSubmitted: (_) => widget.onSend(),
+            onSubmitted: (_) => _handleSend(),
           ),
         ),
         const SizedBox(width: 8),
-
-        // Mic (tap to record) – shown when there is no text
         if (!_hasText) _buildMicButton(accent),
-
         if (!_hasText) const SizedBox(width: 12),
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 150),
           child: _hasText
               ? IconButton(
-            key: const ValueKey('sendButton'),
-            icon: Icon(Icons.send_rounded, color: accent, size: 22),
-            onPressed: widget.onSend,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-          )
+                  key: const ValueKey('sendButton'),
+                  icon: Icon(Icons.send_rounded, color: accent, size: 22),
+                  onPressed: _handleSend,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                )
               : IconButton(
-            key: const ValueKey('likeButton'),
-            icon: Icon(Icons.thumb_up, color: accent, size: 22),
-            onPressed: widget.onLikePressed,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-          ),
+                  key: const ValueKey('likeButton'),
+                  icon: Icon(Icons.thumb_up, color: accent, size: 22),
+                  onPressed: widget.onLikePressed,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
         ),
       ],
     );
   }
 
-  /// "🗑  ● 00:03  ▂▅▇▃▅▂   [➤]" – shown while recording (click based:
-  /// tap the bin to cancel, tap the send button to stop & send).
   Widget _buildRecordingBar(Color accent) {
     return Container(
       key: const ValueKey('recordingBar'),
@@ -531,7 +650,7 @@ class _ConversationInputState extends State<ConversationInput>
           const SizedBox(width: 6),
           ValueListenableBuilder<Duration>(
             valueListenable: _elapsed,
-            builder: (_, d, _) => Text(
+            builder: (_, d, __) => Text(
               _fmt(d),
               style: const TextStyle(
                   fontWeight: FontWeight.w600,
@@ -566,8 +685,6 @@ class _ConversationInputState extends State<ConversationInput>
     );
   }
 
-  /// Mic button: TAP to start recording, tap again (or the send button in
-  /// the recording bar) to stop & send. Click-based so it works on web.
   Widget _buildMicButton(Color accent) {
     return Tooltip(
       message: 'Tap to record voice',
@@ -611,7 +728,7 @@ class _AttachItem {
   const _AttachItem(this.icon, this.label, this.color, this.onTap);
 }
 
-// ───────────────────────── Waveform ─────────────────────────
+// ───────────────────────── Live waveform ─────────────────────────
 
 class _LiveWaveform extends StatefulWidget {
   final Color color;
@@ -636,7 +753,7 @@ class _LiveWaveformState extends State<_LiveWaveform> {
       _sub = widget.amplitude!.listen(_push);
     } else {
       _fake = Timer.periodic(const Duration(milliseconds: 90),
-              (_) => _push(0.15 + _rnd.nextDouble() * 0.85));
+          (_) => _push(0.15 + _rnd.nextDouble() * 0.85));
     }
   }
 

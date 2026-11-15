@@ -37,9 +37,6 @@ class ConversationProvider extends ChangeNotifier {
   }
 
   /// Callback set by HomeScreen to show the incoming call overlay.
-  /// Active group call sessions — callSessionId → info.
-  /// Updated in real-time from GROUP_CALL_STARTED / JOIN_CALL / LEAVE_CALL signals.
-  final Map<String, ActiveGroupCallInfo> activeGroupCalls = {};
 
   static const Duration _timeout = Duration(seconds: 15);
   static const int _conversationPageSize = 20;
