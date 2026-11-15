@@ -96,6 +96,14 @@ class _CallScreenState extends State<CallScreen> {
     await _localRenderer.initialize();
     await _remoteRenderer.initialize();
 
+    // Force audio to loudspeaker immediately on call start.
+    // On Android, WebRTC defaults to the earpiece — this overrides that.
+    // On iOS the AVAudioSession category handles it via flutter_webrtc.
+    if (!widget.isVideo) {
+      // Voice call → speaker on by default so the other person can be heard.
+      await Helper.setSpeakerphoneOn(true);
+    }
+
     final sig = widget.signalingService;
 
     _remoteSub = sig.onRemoteStream.stream.listen((stream) {
@@ -168,6 +176,12 @@ class _CallScreenState extends State<CallScreen> {
     widget.signalingService.toggleCamera(_cameraOff);
   }
 
+  Future<void> _toggleSpeaker() async {
+    final next = !_speakerOn;
+    await Helper.setSpeakerphoneOn(next);
+    if (mounted) setState(() => _speakerOn = next);
+  }
+
   void _switchCamera() => widget.signalingService.switchCamera();
 
   String get _elapsedLabel {
@@ -184,6 +198,8 @@ class _CallScreenState extends State<CallScreen> {
     _endedSub.cancel();
     _localRenderer.dispose();
     _remoteRenderer.dispose();
+    // Restore default audio route when leaving the call screen.
+    Helper.setSpeakerphoneOn(false).catchError((_) {});
     super.dispose();
   }
 
@@ -218,10 +234,12 @@ class _CallScreenState extends State<CallScreen> {
           left: 0, right: 0,
           bottom: MediaQuery.of(context).padding.bottom + 32,
           child: _ControlBar(
-            muted:     _muted,
-            cameraOff: _cameraOff,
-            isVideo:   widget.isVideo,
+            muted:         _muted,
+            cameraOff:     _cameraOff,
+            speakerOn:     _speakerOn,
+            isVideo:       widget.isVideo,
             onMute:         _toggleMute,
+            onSpeaker:      !widget.isVideo ? _toggleSpeaker : null,
             onCameraToggle: widget.isVideo ? _toggleCamera : null,
             onSwitchCamera: widget.isVideo ? _switchCamera : null,
             onHangup:       _hangup,
@@ -287,8 +305,10 @@ class _CallerBackground extends StatelessWidget {
 class _ControlBar extends StatelessWidget {
   final bool muted;
   final bool cameraOff;
+  final bool speakerOn;
   final bool isVideo;
   final VoidCallback onMute;
+  final VoidCallback? onSpeaker;
   final VoidCallback? onCameraToggle;
   final VoidCallback? onSwitchCamera;
   final VoidCallback onHangup;
@@ -296,9 +316,11 @@ class _ControlBar extends StatelessWidget {
   const _ControlBar({
     required this.muted,
     required this.cameraOff,
+    required this.speakerOn,
     required this.isVideo,
     required this.onMute,
     required this.onHangup,
+    this.onSpeaker,
     this.onCameraToggle,
     this.onSwitchCamera,
   });
@@ -313,6 +335,14 @@ class _ControlBar extends StatelessWidget {
           label: muted ? 'Unmute' : 'Mute',
           onTap: onMute,
         ),
+        // Speaker toggle — only on voice calls (video always uses speaker)
+        if (!isVideo)
+          _CtrlBtn(
+            icon: speakerOn ? Icons.volume_up : Icons.hearing,
+            label: speakerOn ? 'Speaker' : 'Earpiece',
+            onTap: onSpeaker ?? () {},
+            active: speakerOn,
+          ),
         if (isVideo) ...[
           _CtrlBtn(
             icon: cameraOff ? Icons.videocam_off : Icons.videocam,
@@ -345,9 +375,13 @@ class _CtrlBtn extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  final bool active;
 
-  const _CtrlBtn(
-      {required this.icon, required this.label, required this.onTap});
+  const _CtrlBtn({
+      required this.icon,
+      required this.label,
+      required this.onTap,
+      this.active = false});
 
   @override
   Widget build(BuildContext context) {
@@ -358,13 +392,13 @@ class _CtrlBtn extends StatelessWidget {
           width: 56,
           height: 56,
           decoration: BoxDecoration(
-              color: Colors.white24, shape: BoxShape.circle),
+              color: active ? Colors.white38 : Colors.white24,
+              shape: BoxShape.circle),
           child: Icon(icon, color: Colors.white, size: 26),
         ),
         const SizedBox(height: 6),
         Text(label,
-            style:
-                const TextStyle(color: Colors.white70, fontSize: 11)),
+            style: const TextStyle(color: Colors.white70, fontSize: 11)),
       ]),
     );
   }
