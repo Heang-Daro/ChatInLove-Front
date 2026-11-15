@@ -5,6 +5,7 @@ import 'package:love_in_chat/model/emun/ConversationType.dart';
 import 'package:love_in_chat/model/emun/MessageType.dart';
 import '../../util/AnimatedComponents.dart';
 import '../ConversationPage.dart';
+import 'message_shortcuts.dart';
 
 class ConversationTile extends StatelessWidget {
   final ConversationResponse chat;
