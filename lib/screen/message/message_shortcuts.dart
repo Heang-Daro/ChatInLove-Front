@@ -75,10 +75,21 @@ class MessageShortcuts {
         icon: Icons.help_outline_rounded),
     ShortcutKey(
         key: 'loop',
-        description: 'Repeat text N times (default 2, max 50)',
+        description: 'Repeat text N times with space (default 2, max 50)',
         example: '#loop3{ha}  →  ha ha ha',
         icon: Icons.repeat_rounded,
         takesCount: true),
+    ShortcutKey(
+        key: 'loopn',
+        description: 'Repeat text N times on NEW LINES (default 2, max 50)',
+        example: '#loopn3{Line}  →  Line\\nLine\\nLine',
+        icon: Icons.format_line_spacing_rounded,
+        takesCount: true),
+    ShortcutKey(
+        key: 'nl',
+        description: 'Insert new line break',
+        example: '#nl{} or Hello#nl{}World',
+        icon: Icons.keyboard_return_rounded),
   ];
 
   static ShortcutKey? find(String name) {
@@ -89,7 +100,7 @@ class MessageShortcuts {
     return null;
   }
 
-  /// True when `#<name><digits>` is a valid key (digits only allowed for loop).
+  /// True when `#<name><digits>` is a valid key (digits allowed for loop & loopn).
   static bool isKey(String name, [String digits = '']) {
     final k = find(name);
     if (k == null) return false;
@@ -159,7 +170,17 @@ class MessageShortcuts {
       case 'loop':
         if (c.isEmpty) return '';
         final n = (int.tryParse(count) ?? 2).clamp(1, 50);
+        // If content ends with \n or starts with \n, join with newline, otherwise space
+        if (c.contains('\n') || c.contains('#nl{}')) {
+          return List.filled(n, c.trim()).join('\n');
+        }
         return List.filled(n, c.trim()).join(' ');
+      case 'loopn':
+        if (c.isEmpty) return '';
+        final n = (int.tryParse(count) ?? 2).clamp(1, 50);
+        return List.filled(n, c.trim()).join('\n');
+      case 'nl':
+        return '\n';
       default:
         return c;
     }
