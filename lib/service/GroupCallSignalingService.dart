@@ -91,6 +91,11 @@ class GroupCallSignalingService {
   final StreamController<MediaStream> onLocalStream =
       StreamController.broadcast();
 
+  /// Fires when a member declines the incoming group call.
+  /// The payload is the display name of the member who declined.
+  final StreamController<String> onParticipantDeclined =
+      StreamController.broadcast();
+
   /// Only active (joined) participants.
   List<GroupParticipant> get participants =>
       List.unmodifiable(_activeParticipants.values);
@@ -215,6 +220,9 @@ class GroupCallSignalingService {
       case 'CALL_HANGUP':
       case 'LEAVE_CALL':
         _removeParticipant(from);
+        break;
+      case 'DECLINE_CALL':
+        _handleDecline(from, msg);
         break;
     }
   }
@@ -386,6 +394,14 @@ class GroupCallSignalingService {
     debugPrint('[GroupCall] $userId left/disconnected');
   }
 
+  /// A member received the incoming-call overlay and tapped "Decline".
+  void _handleDecline(String from, Map<String, dynamic> msg) {
+    final name = msg['declinedUsername']?.toString() ?? from;
+    _removeParticipant(from);
+    if (!onParticipantDeclined.isClosed) onParticipantDeclined.add(name);
+    debugPrint('[GroupCall] $from ($name) declined the call');
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   Future<MediaStream> _getUserMedia() async {
@@ -412,6 +428,9 @@ class GroupCallSignalingService {
   }
 
   Future<void> _teardown() async {
+    // Stop listening on the shared signal queue so a finished group call
+    // doesn't keep reacting to 1-on-1 call frames.
+    stomp.unsubscribeFromSignaling(_onPrivateFrame);
     for (final p in _activeParticipants.values) {
       await p.dispose();
     }
@@ -422,5 +441,6 @@ class GroupCallSignalingService {
     _localStream = null;
     if (!onParticipantsChanged.isClosed) onParticipantsChanged.close();
     if (!onLocalStream.isClosed) onLocalStream.close();
+    if (!onParticipantDeclined.isClosed) onParticipantDeclined.close();
   }
 }

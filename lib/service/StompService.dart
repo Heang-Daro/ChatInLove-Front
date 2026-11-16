@@ -118,15 +118,12 @@ class StompService {
             sub();
           }
 
-          // 5. Re-subscribe to the signal queue if a callback was registered
+          // 5. Re-subscribe to the signal queue if any callback was registered
           //    (handles reconnects — without this, incoming calls stop arriving
           //    after a STOMP reconnect because the subscription is lost).
-          final sigCb = _signalingCallback;
-          if (sigCb != null) {
-            _stompClient?.subscribe(
-              destination: '/user/queue/signal',
-              callback: sigCb,
-            );
+          _liveSignalSubscriptions.clear();
+          for (final sigCb in List.of(_signalingCallbacks)) {
+            _subscribeSignal(sigCb);
           }
         },
         onWebSocketError: (error) {
@@ -259,33 +256,52 @@ class StompService {
     _pendingSubscriptions.clear();
     _activeConversationSubscriptions.clear();
     _activeTypingSubscriptions.clear();
-    _signalingCallback = null;
+    _signalingCallbacks.clear();
+    _liveSignalSubscriptions.clear();
     debugPrint('STOMP client deactivated and cleaned up.');
   }
 
   // ── WebRTC signaling ───────────────────────────────────────────────────────
 
-  /// The active signaling callback — stored so it can be re-registered on reconnect.
-  Function(StompFrame)? _signalingCallback;
+  /// The active signaling callbacks — stored so they are re-registered on
+  /// reconnect.
+  ///
+  /// A list is used because several services listen on the same queue (the
+  /// 1-on-1 call service AND the group call service). Keeping only a single
+  /// callback meant a group call silently disabled 1-on-1 call signalling.
+  final List<Function(StompFrame)> _signalingCallbacks = [];
+
+  /// Callbacks that currently have a live broker subscription. Used to avoid
+  /// duplicate subscriptions (a duplicate delivers every frame twice).
+  final Set<Function(StompFrame)> _liveSignalSubscriptions = {};
 
   /// Subscribe to incoming WebRTC signaling messages on /user/queue/signal.
   /// Storing the callback ensures it is re-subscribed automatically after a
   /// STOMP reconnection (which previously caused the 1-on-1 incoming call to
   /// stop arriving after the first reconnect).
   void subscribeToSignaling(Function(StompFrame) onFrame) {
-    _signalingCallback = onFrame;
-    void doSub() {
-      if (_stompClient == null || !_isConnected) return;
-      _stompClient!.subscribe(
-        destination: '/user/queue/signal',
-        callback: onFrame,
-      );
+    if (!_signalingCallbacks.contains(onFrame)) {
+      _signalingCallbacks.add(onFrame);
     }
-    if (_isConnected && _stompClient != null) {
-      doSub();
-    } else {
-      _pendingSubscriptions.add(doSub);
-    }
+    // If the socket is not connected yet, the onConnect handler subscribes
+    // every registered callback — so nothing to do here.
+    _subscribeSignal(onFrame);
+  }
+
+  void _subscribeSignal(Function(StompFrame) onFrame) {
+    if (_stompClient == null || !_isConnected) return;
+    if (_liveSignalSubscriptions.contains(onFrame)) return;
+    _liveSignalSubscriptions.add(onFrame);
+    _stompClient!.subscribe(
+      destination: '/user/queue/signal',
+      callback: onFrame,
+    );
+  }
+
+  /// Remove a signaling subscriber (e.g. when a call service is disposed).
+  void unsubscribeFromSignaling(Function(StompFrame) onFrame) {
+    _signalingCallbacks.remove(onFrame);
+    _liveSignalSubscriptions.remove(onFrame);
   }
 
   /// Subscribe to group call events on a conversation's /call topic.

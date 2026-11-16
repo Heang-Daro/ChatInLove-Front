@@ -11,8 +11,8 @@ import '../util/AppBarStyle.dart';
 import 'ChatRequestScreen.dart';
 import 'ChatSearchDelegate.dart';
 import 'CreateGroupScreen.dart';
-import 'GroupCallScreen.dart';
 import 'IncomingCallScreen.dart';
+import 'IncomingGroupCallScreen.dart';
 import 'ProfileScreen.dart';
 import 'setting_util/SettingScreen.dart';
 import 'home_body/all.dart';
@@ -75,12 +75,11 @@ class _HomeScreenState extends State<HomeScreen> {
         final isGroup = offer['isGroup'] == true;
 
         if (isGroup) {
-          // ── Incoming group call ──────────────────────────────────────────
+          // ── Incoming group call — show Join/Decline overlay first ────────
           final convId       = offer['conversationId']?.toString() ?? '';
           final callerUserId = (offer['fromUserId'] ?? offer['callerUserId'])?.toString() ?? '';
           final callType     = offer['callType']?.toString().toUpperCase();
 
-          // Find the caller's display name from the conversation member list.
           String callerName = callerUserId;
           final conv = conversationProvider.conversations
               .where((c) => c.id == convId)
@@ -91,17 +90,23 @@ class _HomeScreenState extends State<HomeScreen> {
           if (callerMember != null) callerName = callerMember.username;
 
           final localUserId = context.read<AuthProvider>().currentUserId ?? '';
+          final localUsername = context.read<AuthProvider>().currentUser?.username ?? '';
 
+          // Push the ringing overlay — member taps Join to actually enter the call.
           Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => GroupCallScreen(
+            builder: (_) => IncomingGroupCallScreen(
               conversationId: convId,
               groupName:      conv?.name ?? 'Group call',
               isVideo:        callType == 'VIDEO',
               localUserId:    localUserId,
-              callerUserId:   callerUserId,   // callee path — join existing
+              callerUserId:   callerUserId,
               callerUsername: callerName,
+              localUsername:  localUsername,
             ),
-          )).whenComplete(() => conversationProvider.markCallEnded());
+          ));
+          // NOTE: no markCallEnded() here — the overlay releases the call slot
+          // itself when it is dismissed without joining, and the call screen
+          // releases it when the call ends.
         } else {
           // ── Incoming 1-to-1 call ─────────────────────────────────────────
           String callerName = fromId;

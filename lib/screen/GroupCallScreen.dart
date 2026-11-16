@@ -5,7 +5,6 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
 
 import 'package:love_in_chat/model/emun/MessageType.dart' as app_msg;
-import 'package:love_in_chat/model/Response/ConversationMemberResponse.dart';
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
 import 'package:love_in_chat/service/CallRingtoneService.dart';
@@ -46,11 +45,13 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
 
   late final StreamSubscription _changeSub;
   late final StreamSubscription _localSub;
+  late final StreamSubscription _declinedSub;
 
   bool _muted    = false;
   bool _camOff   = false;
   bool _joined   = false; // true once at least one peer connects
   bool _msgSent  = false;
+  bool _leaving  = false; // guards a double teardown
 
   Duration _elapsed = Duration.zero;
   Timer? _timer;
@@ -83,13 +84,24 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
       if (mounted) setState(() => _localRenderer.srcObject = stream);
     });
 
+    // Caller side: a member that taps "Decline" on the incoming-call overlay.
+    _declinedSub = _sig.onParticipantDeclined.stream.listen((name) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$name declined the call'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    });
+
     _start();
   }
 
   Future<void> _start() async {
     if (widget.callerUserId != null) {
-      // Callee path: play ringtone then join existing call.
-      CallRingtoneService.playRingtone();
+      // Joiner path: the user already accepted on the incoming-call overlay,
+      // so no ringtone here — just ask the caller for an offer.
       await _sig.joinExistingCall(
         callerUserId:   widget.callerUserId!,
         callerUsername: widget.callerUsername ?? widget.callerUserId!,
@@ -108,13 +120,17 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   }
 
   Future<void> _leave() async {
+    if (_leaving) return;
+    _leaving = true;
     _timer?.cancel();
+    // Capture the provider before any await to avoid using BuildContext
+    // across an async gap.
+    final convos = context.read<ConversationProvider>();
     // Only the caller logs the group call summary message
     if (!_msgSent && widget.callerUserId == null) {
       _msgSent = true;
       try {
         final auth  = context.read<AuthProvider>();
-        final convos = context.read<ConversationProvider>();
         final kind   = widget.isVideo ? 'VIDEO' : 'AUDIO';
         final outcome = _joined ? _elapsedLabel : 'MISSED';
         await convos.sendMessage(auth, widget.conversationId,
@@ -122,6 +138,8 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
       } catch (_) {}
     }
     await _sig.leave();
+    // Allow a new incoming call to be shown once this one is finished.
+    convos.markCallEnded();
     if (mounted) Navigator.of(context).pop();
   }
 
@@ -135,9 +153,17 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   void dispose() {
     _changeSub.cancel();
     _localSub.cancel();
+    _declinedSub.cancel();
     _localRenderer.dispose();
     _timer?.cancel();
     CallRingtoneService.stop();
+    // If the screen was dismissed without pressing the hang-up button
+    // (e.g. the system back gesture), still tear down the peer connections
+    // and notify the other participants.
+    if (!_leaving) {
+      _leaving = true;
+      _sig.leave();
+    }
     super.dispose();
   }
 

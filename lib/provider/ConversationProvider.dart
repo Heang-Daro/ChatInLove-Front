@@ -289,6 +289,12 @@ class ConversationProvider extends ChangeNotifier {
         handleGroupCallSignal(offer);
         // Also trigger incoming call overlay for GROUP_CALL_STARTED.
         if (offer['type']?.toString() == 'GROUP_CALL_STARTED') {
+          // Never ring for our own broadcast (we are the caller).
+          final callerId = offer['fromUserId'] ?? offer['callerUserId'];
+          if (callerId != null &&
+              callerId.toString() == authProviderUserId) {
+            return;
+          }
           if (!_callInProgress) {
             _callInProgress = true;
             onIncomingCall?.call(offer);
