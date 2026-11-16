@@ -43,10 +43,21 @@ class ConversationProvider extends ChangeNotifier {
   static const int _conversationPageSize = 20;
   static const int _messagePageSize = 50;
 
-  /// When the backend supports a `since=<iso timestamp>` parameter, set this
-  /// to true: the server then only returns what changed after the cached
-  /// snapshot was written. Until then the client-side diff does the same job.
-  static const bool _sendSinceParam = false;
+  /// The backend supports a `since=<iso timestamp>` parameter on the chat
+  /// list: the server then only returns the conversations that changed after
+  /// the given timestamp instead of the whole first page.
+  static const bool _sendSinceParam = true;
+
+  /// The message endpoint uses the exact `after=<sequenceId>` cursor for the
+  /// offline delta sync (see ChatRepository.syncMissedMessages), so the
+  /// timestamp based `since` filter is not used there - it would break the
+  /// page based "load older messages" pagination.
+  static const bool _sendSinceParamForMessages = false;
+
+  /// Safety margin for the `since` filter: the client clock and the server
+  /// clock are not guaranteed to be in sync, so a small overlap is added to
+  /// make sure nothing is missed.
+  static const Duration _sinceSafetyMargin = Duration(minutes: 2);
 
   // ---- Conversations state ----
   List<ConversationResponse> _conversations = [];
@@ -496,14 +507,20 @@ class ConversationProvider extends ChangeNotifier {
 
     try {
       // 2. Ask the server only for what we do not have yet. The `since`
-      //    parameter is optional on the backend; when it is ignored the
-      //    client-side diff below still removes every unchanged item.
+      //    parameter makes the server return only the conversations that
+      //    changed after the last sync; the client-side diff below still
+      //    removes every unchanged item.
       final query = <String, String>{
         'page': '0',
         'size': '$_conversationPageSize',
       };
-      final since = _lastServerSyncAt?.toUtc().toIso8601String();
-      if (since != null && _sendSinceParam) query['since'] = since;
+      final lastSync = _lastServerSyncAt;
+      if (lastSync != null && _sendSinceParam) {
+        query['since'] = lastSync
+            .subtract(_sinceSafetyMargin)
+            .toUtc()
+            .toIso8601String();
+      }
 
       final response = await authProvider.authorizedRequest((token) async {
         return await http.get(
@@ -688,7 +705,7 @@ class ConversationProvider extends ChangeNotifier {
         'size': '$_messagePageSize',
       };
       final since = cached?.savedAt.toUtc().toIso8601String();
-      if (since != null && _sendSinceParam) query['since'] = since;
+      if (since != null && _sendSinceParamForMessages) query['since'] = since;
 
       final response = await authProvider.authorizedRequest((token) async {
         return await http.get(

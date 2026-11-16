@@ -14,6 +14,10 @@ class MessageResponse {
   final DateTime? deletedAt;
   final String? relatedCallId;
 
+  /// Monotonic server-side cursor. Sent back to the server as `?after=<id>`
+  /// to fetch only the messages that were missed while offline.
+  final int? sequenceId;
+
   MessageResponse({
     required this.id,
     required this.conversationId,
@@ -26,6 +30,7 @@ class MessageResponse {
     this.editedAt,
     this.deletedAt,
     this.relatedCallId,
+    this.sequenceId,
   });
 
   /// Human readable preview for chat lists / notifications.
@@ -78,6 +83,9 @@ class MessageResponse {
       editedAt: json['editedAt'] != null ? DateTime.parse(json['editedAt']).toUtc() : null,
       deletedAt: json['deletedAt'] != null ? DateTime.parse(json['deletedAt']).toUtc() : null,
       relatedCallId: json['relatedCallId'],
+      sequenceId: json['sequenceId'] is num
+          ? (json['sequenceId'] as num).toInt()
+          : null,
     );
   }
 
@@ -94,6 +102,7 @@ class MessageResponse {
       'editedAt': editedAt?.toIso8601String(),
       'deletedAt': deletedAt?.toIso8601String(),
       'relatedCallId': relatedCallId,
+      'sequenceId': sequenceId,
     };
   }
 }

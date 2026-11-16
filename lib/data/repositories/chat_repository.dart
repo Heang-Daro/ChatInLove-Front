@@ -44,6 +44,9 @@ class ChatRepository {
 
   static const Duration _timeout = Duration(seconds: 15);
 
+  /// Number of messages that are fetched per page during the offline sync.
+  static const int _syncPageSize = 200;
+
   MessageDao get _messages => MessageDao(db);
   ChatDao get _chats => ChatDao(db);
 
@@ -223,6 +226,11 @@ class ChatRepository {
   /// [lastSequenceId] is the highest sequence id the device already knows.
   /// When [chatId] is null every cached chat is synchronised, otherwise only
   /// that one. Returns the number of messages that were received.
+  ///
+  /// The server understands `?after=<sequenceId>`: it only returns the
+  /// messages that are newer than that cursor, oldest first. The loop below
+  /// repeats the call until the server has nothing left to send, so a long
+  /// offline period is synced in pages instead of one huge request.
   Future<int> syncMissedMessages(int lastSequenceId, {String? chatId}) async {
     final chatIds =
         chatId != null ? <String>[chatId] : await _chats.allChatIds();
@@ -230,60 +238,112 @@ class ChatRepository {
     var synced = 0;
 
     for (final id in chatIds) {
-      final from = chatId != null ? lastSequenceId : await _chats.lastSequenceId(id);
+      var from = chatId != null ? lastSequenceId : await _chats.lastSequenceId(id);
 
-      try {
-        final response = await auth.authorizedRequest((token) async {
-          return await http.get(
-            Uri.parse('$baseUrl/api/conversations/$id/messages').replace(
-              queryParameters: {
-                'after': '$from',
-                'size': '200',
-              },
-            ),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-          );
-        }).timeout(_timeout);
+      // Nothing known yet: fetch the newest page only, otherwise the whole
+      // history of the chat would be downloaded on the first sync.
+      if (from <= 0) {
+        final page = await _fetchMessages(id, {
+          'page': '0',
+          'size': '$_syncPageSize',
+        });
+        final batch = _companionsOf(page);
+        if (batch.isEmpty) continue;
 
-        if (response.statusCode != 200) continue;
-
-        final decoded = json.decode(response.body);
-        final List<dynamic> content;
-        if (decoded is Map<String, dynamic>) {
-          content = (decoded['content'] as List?) ?? const [];
-        } else if (decoded is List) {
-          content = decoded;
-        } else {
-          content = const [];
-        }
-
-        final batch = <MessagesCompanion>[];
         var maxSequence = from;
-
-        for (final raw in content) {
-          if (raw is! Map) continue;
-          final map = Map<String, dynamic>.from(raw);
-          final sequence = map['sequenceId'];
-          if (sequence is int && sequence > maxSequence) maxSequence = sequence;
-          batch.add(_companionFromServerMap(map));
+        for (final companion in batch) {
+          final sequence = companion.sequenceId.value;
+          if (sequence != null && sequence > maxSequence) maxSequence = sequence;
         }
 
-        if (batch.isNotEmpty) {
-          await _messages.upsertIncomingBatch(batch);
-          synced += batch.length;
-        }
+        await _messages.upsertIncomingBatch(batch);
+        synced += batch.length;
         await _chats.setLastSequenceId(id, maxSequence);
-      } on TimeoutException {
-        // Keep the local state, the next reconnect tries again.
-      } catch (e) {
-        debugPrint('ChatRepository: sync failed for $id: $e');
+        continue;
+      }
+
+      // Delta sync: only the messages that are newer than the cursor.
+      while (true) {
+        final page = await _fetchMessages(id, {
+          'after': '$from',
+          'size': '$_syncPageSize',
+        });
+        if (page.isEmpty) break;
+
+        final batch = _companionsOf(page);
+        if (batch.isEmpty) break;
+
+        var maxSequence = from;
+        for (final companion in batch) {
+          final sequence = companion.sequenceId.value;
+          if (sequence != null && sequence > maxSequence) maxSequence = sequence;
+        }
+
+        await _messages.upsertIncomingBatch(batch);
+        synced += batch.length;
+        await _chats.setLastSequenceId(id, maxSequence);
+
+        // A short page means the server has sent everything.
+        if (page.length < _syncPageSize || maxSequence == from) break;
+        from = maxSequence;
       }
     }
 
     return synced;
+  }
+
+  /// Downloads one page of messages of a chat.
+  ///
+  /// Returns the raw entries of the `content` array of the response.
+  Future<List<Map<String, dynamic>>> _fetchMessages(
+    String conversationId,
+    Map<String, String> query,
+  ) async {
+    try {
+      final response = await auth.authorizedRequest((token) async {
+        return await http.get(
+          Uri.parse('$baseUrl/api/conversations/$conversationId/messages').replace(
+            queryParameters: query,
+          ),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+        );
+      }).timeout(_timeout);
+
+      if (response.statusCode != 200) return const [];
+
+      final decoded = json.decode(response.body);
+      final List<dynamic> content;
+      if (decoded is Map<String, dynamic>) {
+        content = (decoded['content'] as List?) ?? const [];
+      } else if (decoded is List) {
+        content = decoded;
+      } else {
+        content = const [];
+      }
+
+      return content
+          .whereType<Map>()
+          .map((raw) => Map<String, dynamic>.from(raw))
+          .toList();
+    } on TimeoutException {
+      // Keep the local state, the next reconnect tries again.
+      return const [];
+    } catch (e) {
+      debugPrint('ChatRepository: sync failed for $conversationId: $e');
+      return const [];
+    }
+  }
+
+  /// Converts the raw entries of a message page into database rows.
+  List<MessagesCompanion> _companionsOf(List<Map<String, dynamic>> page) {
+    final batch = <MessagesCompanion>[];
+    for (final map in page) {
+      batch.add(_companionFromServerMap(map));
+    }
+    return batch;
   }
 
   /// Downloads the conversation list from the backend into the database, so the
