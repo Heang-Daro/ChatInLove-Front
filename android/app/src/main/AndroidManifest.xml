@@ -65,7 +65,7 @@
         <!-- Needed so url_launcher can find the Google Maps app (Android 11+) -->
         <intent>
             <action android:name="android.intent.action.VIEW" />
-            <data android:scheme="comgooglemaps" />
+            <data android:scheme="geo" />
         </intent>
     </queries>
 </manifest>

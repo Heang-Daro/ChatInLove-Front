@@ -13,19 +13,34 @@ import 'package:love_in_chat/service/ChatAppearanceService.dart';
 import 'package:love_in_chat/service/NotificationService.dart';
 import 'package:provider/provider.dart';
 
+// Top-level function for background FCM messages
+@pragma('vm:entry-point')
+Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp();
+  debugPrint('Handling a background message: ${message.messageId}');
+}
+
 void main() async {
+  // ថែទាំការผูก Binding ឱ្យបានត្រឹមត្រូវ
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ផ្ទៀងផ្ទាត់ និង Initialize Firebase ឱ្យបានម៉ត់ចត់
   try {
     await Firebase.initializeApp();
     FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+    debugPrint('[Firebase] Initialized successfully in main.');
   } catch (e) {
-    debugPrint('[Firebase] Initialization skipped or error: $e');
+    debugPrint('[Firebase] Initialization error: $e');
   }
 
-  await NotificationService.initialize();
-  await CacheService.init();
-  await ChatAppearanceService.initialize();
-  debugPrint('APP STARTED & NOTIFICATION SERVICE INITIALIZED');
+  // ដំណើរការ Services ផ្សេងៗស្របគ្នា (Concurrent Initialization)
+  await Future.wait([
+    NotificationService.initialize(),
+    CacheService.init(),
+    ChatAppearanceService.initialize(),
+  ]);
+
+  debugPrint('APP STARTED & ALL SERVICES INITIALIZED SUCCESSFULLY');
 
   final database = AppDatabase();
   runApp(
@@ -40,7 +55,7 @@ void main() async {
             auth: context.read<AuthProvider>(),
           ),
           update: (context, auth, previous) =>
-              previous ?? ChatRepository(db: database, auth: auth),
+          previous ?? ChatRepository(db: database, auth: auth),
           dispose: (context, repository) => repository.stopListening(),
         ),
       ],
@@ -64,7 +79,7 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      navigatorKey: navigatorKey,
+      navigatorKey: navigatorKey, // ប្រាកដថា CallKitService មាន navigatorKey នេះ
       title: 'In Love',
       debugShowCheckedModeBanner: false,
       themeMode: _themeMode,

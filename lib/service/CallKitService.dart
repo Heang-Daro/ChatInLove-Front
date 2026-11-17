@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
@@ -14,7 +15,7 @@ import 'package:uuid/uuid.dart';
 
 import 'package:love_in_chat/api/api.dart';
 import '../screen/CallScreen.dart';
-import '../screen/IncomingGroupCallScreen.dart';
+import '../screen/GroupCallScreen.dart';
 import 'CallRingtoneService.dart';
 import 'CallSignalingService.dart';
 import 'StompService.dart';
@@ -61,9 +62,37 @@ class CallKitService {
   static const _kUserId = 'user_id';
   static const _kUsername = 'username';
 
+  /// Must match the caller's ring timeout (CallScreen._ringTimeout = 45s),
+  /// otherwise the callee's native UI disappears while the caller still rings.
+  static const _ringDurationMs = 45000;
+
   static void setSignalingService(CallSignalingService service) {
     _signalingService = service;
   }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Payload helpers
+  // ───────────────────────────────────────────────────────────────────────────
+
+  static bool _isTrue(dynamic v) => v == true || v?.toString() == 'true';
+
+  static bool _isVideoCall(Map<String, dynamic> d) =>
+      d['callType']?.toString().toUpperCase() == 'VIDEO' || _isTrue(d['isVideo']);
+
+  static bool _isGroupCall(Map<String, dynamic> d) =>
+      _isTrue(d['isGroup']) || d['type']?.toString() == 'GROUP_CALL_STARTED';
+
+  static String _sessionIdOf(Map<String, dynamic> d) =>
+      d['callSessionId']?.toString() ?? d['callId']?.toString() ?? '';
+
+  static String _callerNameOf(Map<String, dynamic> d, {String fallback = 'Caller'}) =>
+      d['callerName']?.toString() ??
+          d['fromUsername']?.toString() ??
+          d['callerUsername']?.toString() ??
+          fallback;
+
+  static String _callerIdOf(Map<String, dynamic> d) =>
+      d['fromUserId']?.toString() ?? d['callerUserId']?.toString() ?? '';
 
   // ───────────────────────────────────────────────────────────────────────────
   // Show / end
@@ -97,32 +126,35 @@ class CallKitService {
 
     _handledCallIds.add(callId);
 
-    final callerName = data['callerName']?.toString() ??
-        data['fromUsername']?.toString() ??
-        data['fromUserId']?.toString() ??
-        'Incoming Call';
-
-    final isVideo = data['callType']?.toString().toUpperCase() == 'VIDEO' ||
-        data['isVideo'] == 'true' ||
-        data['isVideo'] == true;
+    final callerName = _callerNameOf(
+      data,
+      fallback: data['fromUserId']?.toString() ?? 'Incoming Call',
+    );
+    final isVideo = _isVideoCall(data);
+    final isGroup = _isGroupCall(data);
+    final groupName =
+        data['groupName']?.toString() ?? data['chatName']?.toString() ?? 'Group Call';
 
     final params = CallKitParams(
       id: callId,
-      nameCaller: callerName,
+      // Group calls show the group as the title and who started it below.
+      nameCaller: isGroup ? groupName : callerName,
       appName: 'In Love',
       avatar: data['avatar']?.toString() ?? '',
-      handle: callerName,
+      handle: isGroup ? '$callerName started a group call' : callerName,
       type: isVideo ? 1 : 0,
-      duration: 30000,
-      textAccept: 'Accept',
+      duration: _ringDurationMs,
+      textAccept: isGroup ? 'Join' : 'Accept',
       textDecline: 'Decline',
       extra: Map<String, dynamic>.from(data),
+      // Matches the in-app incoming screen: dark background, pinkAccent 400
+      // accept button (white text stays readable on both).
       android: const AndroidParams(
         isCustomNotification: true,
         isShowLogo: false,
         ringtonePath: 'system_ringtone_default',
-        backgroundColor: '#FF4081',
-        actionColor: '#4CAF50',
+        backgroundColor: '#1A0F16',
+        actionColor: '#F50057', // Colors.pinkAccent.shade400
         textColor: '#ffffff',
       ),
       ios: const IOSParams(
@@ -144,9 +176,13 @@ class CallKitService {
     await FlutterCallkitIncoming.showCallkitIncoming(params);
   }
 
-  /// Dismisses all active CallKit calls (e.g. when the caller cancels).
+  /// Dismisses all active CallKit calls (e.g. when the caller cancels, or when
+  /// a call screen closes).
   static Future<void> endAllCalls() async {
     _handledCallIds.clear();
+    // The call is over: forget accepted sessions so a later call that reuses
+    // the same id (the fallback id is the conversationId) isn't ignored.
+    _acceptedSessions.clear();
     await FlutterCallkitIncoming.endAllCalls();
   }
 
@@ -177,9 +213,12 @@ class CallKitService {
       if (event == null) return;
       debugPrint('[CallKit Event] ${event.event}: ${event.body}');
 
-      final body = event.body is Map ? Map<String, dynamic>.from(event.body) : <String, dynamic>{};
+      final body = event.body is Map
+          ? Map<String, dynamic>.from(event.body)
+          : <String, dynamic>{};
       final rawExtra = body['extra'];
-      final extra = rawExtra is Map ? Map<String, dynamic>.from(rawExtra) : body;
+      final extra =
+      rawExtra is Map ? Map<String, dynamic>.from(rawExtra) : body;
 
       switch (event.event) {
         case Event.actionCallAccept:
@@ -213,32 +252,33 @@ class CallKitService {
   // ───────────────────────────────────────────────────────────────────────────
 
   /// POST /api/calls/{action}/{sessionId}. Returns true on 2xx.
-  static Future<bool> postCallAction(String action, String sessionId) async {
+  static Future<bool> postCallAction(String action, String sessionId, {Map<String, dynamic>? sdp}) async {
     if (sessionId.isEmpty) return false;
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString(_kAccessToken);
-      if (token == null || token.isEmpty) {
-        debugPrint('[CallKit] No access token; cannot POST $action.');
-        return false;
+      if (token == null || token.isEmpty) return false;
+
+      final bodyData = <String, dynamic>{};
+      if (sdp != null) {
+        bodyData['sdp'] = sdp;
       }
+
       final res = await http.post(
         Uri.parse('$REST_URL/api/calls/$action/$sessionId'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
+        body: jsonEncode(bodyData),
       ).timeout(const Duration(seconds: 5));
 
-      final ok = res.statusCode >= 200 && res.statusCode < 300;
-      debugPrint('[CallKit] POST $action/$sessionId -> ${res.statusCode}');
-      return ok;
+      return res.statusCode >= 200 && res.statusCode < 300;
     } catch (e) {
       debugPrint('[CallKit] POST $action error: $e');
       return false;
     }
   }
-
   /// Waits for MaterialApp to build (needed on cold start from a killed state).
   static Future<NavigatorState?> _waitForNavigator() async {
     for (var i = 0; i < 50; i++) {
@@ -251,8 +291,7 @@ class CallKitService {
   }
 
   static Future<void> _handleCallAccept(Map<String, dynamic> extra) async {
-    final sessionId =
-        extra['callSessionId']?.toString() ?? extra['callId']?.toString() ?? '';
+    final sessionId = _sessionIdOf(extra);
 
     // DIAGNOSTIC: if the offer/SDP isn't in this list, answerCall() will fail
     // and CallScreen will close right after opening.
@@ -271,16 +310,10 @@ class CallKitService {
     }
 
     final conversationId = extra['conversationId']?.toString() ?? '';
-    final fromUserId =
-        extra['fromUserId']?.toString() ?? extra['callerUserId']?.toString() ?? '';
-    final callerName =
-        extra['callerName']?.toString() ?? extra['fromUsername']?.toString() ?? 'Caller';
-    final isVideo = extra['callType']?.toString().toUpperCase() == 'VIDEO' ||
-        extra['isVideo'] == 'true' ||
-        extra['isVideo'] == true;
-    final isGroup = extra['isGroup'] == true ||
-        extra['isGroup'] == 'true' ||
-        extra['type']?.toString() == 'GROUP_CALL_STARTED';
+    final fromUserId = _callerIdOf(extra);
+    final callerName = _callerNameOf(extra);
+    final isVideo = _isVideoCall(extra);
+    final isGroup = _isGroupCall(extra);
 
     // 1. Tell the server right away so the caller stops ringing,
     //    but do NOT block navigation on the network.
@@ -292,28 +325,30 @@ class CallKitService {
 
     // 3. Resolve the REAL local user (not the caller).
     final prefs = await SharedPreferences.getInstance();
-    final localUserId = prefs.getString(_kUserId) ?? extra['localUserId']?.toString() ?? '';
-    final localUsername =
-        prefs.getString(_kUsername) ?? extra['localUsername']?.toString() ?? '';
+    final localUserId =
+        prefs.getString(_kUserId) ?? extra['localUserId']?.toString() ?? '';
 
     // 4. Navigate (waiting for the navigator on cold start).
     final nav = await _waitForNavigator();
     if (nav == null) return;
 
     if (isGroup) {
-      final groupName =
-          extra['groupName']?.toString() ?? extra['chatName']?.toString() ?? 'Group Call';
+      final groupName = extra['groupName']?.toString() ??
+          extra['chatName']?.toString() ??
+          'Group Call';
 
+      // The user already tapped Join in the native UI, so go straight into
+      // the call. (Showing IncomingGroupCallScreen here would ring again and
+      // ask them to accept a second time.)
       nav.push(
         MaterialPageRoute(
-          builder: (_) => IncomingGroupCallScreen(
+          builder: (_) => GroupCallScreen(
             conversationId: conversationId,
             groupName: groupName,
             isVideo: isVideo,
             localUserId: localUserId,
             callerUserId: fromUserId,
             callerUsername: callerName,
-            localUsername: localUsername,
           ),
         ),
       );
@@ -348,11 +383,38 @@ class CallKitService {
   }
 
   static Future<void> _handleCallDecline(Map<String, dynamic> extra) async {
-    final sessionId =
-        extra['callSessionId']?.toString() ?? extra['callId']?.toString() ?? '';
+    final sessionId = _sessionIdOf(extra);
 
     await CallRingtoneService.stop();
     await _endCallKitUiSilently();
+
+    // Group call: same signal IncomingGroupCallScreen sends, so the caller
+    // sees "<name> declined the call" instead of nothing.
+    if (_isGroupCall(extra)) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final localUserId =
+            prefs.getString(_kUserId) ?? extra['localUserId']?.toString() ?? '';
+        final localUsername = prefs.getString(_kUsername) ??
+            extra['localUsername']?.toString() ??
+            '';
+        final callerId = _callerIdOf(extra);
+        if (callerId.isNotEmpty) {
+          StompService().sendSignal(callerId, {
+            'type': 'DECLINE_CALL',
+            'fromUserId': localUserId,
+            'conversationId': extra['conversationId']?.toString() ?? '',
+            'isGroup': true,
+            'declinedUsername':
+            localUsername.isNotEmpty ? localUsername : localUserId,
+          });
+        }
+      } catch (e) {
+        // Declining must always work, even offline.
+        debugPrint('[CallKit] group decline signal failed: $e');
+      }
+      return;
+    }
 
     // One source of truth: REST first; fall back to signaling only if it failed.
     final ok = await postCallAction('reject', sessionId);
@@ -366,14 +428,17 @@ class CallKitService {
   // ───────────────────────────────────────────────────────────────────────────
 
   /// Check active accepted call on cold launch
-  static Future<void> checkActiveCallsOnLaunch(CallSignalingService signalingService) async {
+  static Future<void> checkActiveCallsOnLaunch(
+      CallSignalingService signalingService) async {
     _signalingService = signalingService;
 
     final dynamic activeCalls = await FlutterCallkitIncoming.activeCalls();
     if (activeCalls is List && activeCalls.isNotEmpty) {
       final call = activeCalls.first;
       final rawExtra = call['extra'];
-      final extra = rawExtra is Map ? Map<String, dynamic>.from(rawExtra) : <String, dynamic>{};
+      final extra = rawExtra is Map
+          ? Map<String, dynamic>.from(rawExtra)
+          : <String, dynamic>{};
       final isAccepted = call['isAccepted'] == true || call['accepted'] == true;
 
       if (isAccepted && extra.isNotEmpty) {
@@ -392,7 +457,8 @@ class CallKitService {
     try {
       await FlutterCallkitIncoming.requestNotificationPermission({
         "title": "Notification permission",
-        "messageText": "Love In Chat needs notification permission for incoming calls.",
+        "messageText":
+        "Love In Chat needs notification permission for incoming calls.",
         "textAccept": "Allow",
         "textDecline": "Deny"
       });
