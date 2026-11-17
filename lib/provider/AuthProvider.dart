@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
@@ -14,6 +15,7 @@ import 'package:love_in_chat/model/Response/AuthResponse.dart';
 import '../model/Response/UserResponse.dart';
 import '../service/AccountManager.dart';
 import '../service/CacheService.dart';
+import '../service/CallKitService.dart';
 import '../service/DeviceLocationService.dart';
 
 typedef ConversationProviderResetter = void Function();
@@ -95,8 +97,27 @@ class AuthProvider extends ChangeNotifier {
       if (response.statusCode == 200) {
         _currentUser = UserResponse.fromJson(json.decode(response.body));
         notifyListeners();
+        syncFcmToken();
       }
     } catch (_) {}
+  }
+
+  Future<void> syncFcmToken() async {
+    final token = _accessToken;
+    if (token == null) return;
+    try {
+      final fcmToken = await FirebaseMessaging.instance.getToken();
+      if (fcmToken != null && fcmToken.isNotEmpty) {
+        await http.post(
+          Uri.parse('$REST_URL/api/users/fcm-token'),
+          headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $token'},
+          body: json.encode({'fcmToken': fcmToken}),
+        );
+        debugPrint('[FCM Token] Synced FCM token with server successfully.');
+      }
+    } catch (e) {
+      debugPrint('[FCM Token] Sync error: $e');
+    }
   }
 
   bool _isExpired(String token) {
@@ -364,6 +385,31 @@ class AuthProvider extends ChangeNotifier {
       }, body: json.encode(profile.toJson())).timeout(_timeout);
       return response.statusCode >= 200 && response.statusCode < 300;
     } catch (e) { debugPrint('AuthProvider: could not sync the device: $e'); return false; }
+  }
+
+  Future<void> syncPushTokens() async {
+    final token = _accessToken;
+    if (token == null || token.isEmpty) return;
+    try {
+      final voipToken = await CallKitService.getVoipToken();
+      final fcmToken = await CallKitService.getFcmToken();
+      debugPrint('[PushTokens] FCM Token: $fcmToken');
+      debugPrint('[PushTokens] VoIP Token: $voipToken');
+
+      await http.put(
+        Uri.parse('$baseUrl/devices/current/push-tokens'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: json.encode({
+          'fcmToken': fcmToken,
+          'voipToken': voipToken,
+        }),
+      ).timeout(const Duration(seconds: 10));
+    } catch (e) {
+      debugPrint('AuthProvider: could not sync push tokens: $e');
+    }
   }
 
   Future<void> logout() async {

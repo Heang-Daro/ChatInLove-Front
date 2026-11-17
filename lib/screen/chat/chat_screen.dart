@@ -5,6 +5,8 @@ import 'package:love_in_chat/data/database/app_database.dart';
 import 'package:love_in_chat/data/repositories/chat_repository.dart';
 import 'package:love_in_chat/model/emun/MessageType.dart';
 import 'package:love_in_chat/provider/AuthProvider.dart';
+import 'package:love_in_chat/screen/message/VideoMessageBubble.dart';
+import 'package:love_in_chat/screen/message/VoiceMessageBubble.dart';
 import 'package:love_in_chat/util/AppBarStyle.dart';
 
 /// Chat screen that is driven **purely** by the local database.
@@ -271,7 +273,17 @@ class _MessageBubble extends StatelessWidget {
           ),
         );
       case MessageType.VOICE:
+        return VoiceMessageBubble(
+          audioUrl: message.mediaUrl ?? message.content,
+          isMe: isMine,
+        );
       case MessageType.VIDEO:
+        return VideoMessageBubble(
+          videoUrl: message.mediaUrl ?? message.content,
+          isMe: isMine,
+          width: 220,
+          height: 150,
+        );
       case MessageType.FILE:
         return Row(
           mainAxisSize: MainAxisSize.min,

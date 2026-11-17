@@ -7,8 +7,10 @@ import 'package:provider/provider.dart';
 import 'package:love_in_chat/model/emun/MessageType.dart' as app_msg;
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
+import 'package:love_in_chat/service/CallKitService.dart';
 import 'package:love_in_chat/service/CallRingtoneService.dart';
 import 'package:love_in_chat/service/CallSignalingService.dart';
+import 'HomeScreen.dart';
 
 /// Full-screen in-call screen.
 ///
@@ -38,22 +40,35 @@ class CallScreen extends StatefulWidget {
 }
 
 class _CallScreenState extends State<CallScreen> {
-  final _localRenderer  = RTCVideoRenderer();
+  /// How long the caller waits for an answer before giving up.
+  static const _ringTimeout = Duration(seconds: 45);
+
+  final _localRenderer = RTCVideoRenderer();
   final _remoteRenderer = RTCVideoRenderer();
 
-  late final StreamSubscription _remoteSub;
-  late final StreamSubscription _localSub;
-  late final StreamSubscription _endedSub;
+  // Nullable: they are assigned after async work, and dispose() may run first.
+  StreamSubscription? _remoteSub;
+  StreamSubscription? _localSub;
+  StreamSubscription? _endedSub;
 
-  bool _muted      = false;
-  bool _cameraOff  = false;
-  bool _speakerOn  = true;
-  bool _connected  = false;
-  bool _ringing    = true;
+  // Captured up-front so we can still send the call message even if the
+  // widget is already leaving the tree (context.read after await is unsafe).
+  late final AuthProvider _auth;
+  late final ConversationProvider _convos;
+
+  bool _muted = false;
+  bool _cameraOff = false;
+  bool _speakerOn = true;
+  bool _connected = false;
+  bool _ringing = true;
   bool _messageSent = false; // guard against double-sending
+  bool _leaving = false; // guard against double pop
+
+  bool get _isCaller => widget.incomingOffer == null;
 
   Duration _elapsed = Duration.zero;
   Timer? _timer;
+  Timer? _ringTimer;
 
   // ── Call summary message ─────────────────────────────────────────────────
 
@@ -64,25 +79,24 @@ class _CallScreenState extends State<CallScreen> {
     return '$kind:$outcome';
   }
 
+  /// mm:ss (minutes may exceed 59 so the stored format stays parseable).
   String get _durationLabel {
-    final m = _elapsed.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final m = _elapsed.inMinutes.toString().padLeft(2, '0');
     final s = _elapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';
   }
 
   Future<void> _sendCallMessage(String outcome) async {
     if (_messageSent) return;
-    // CRITICAL: Only the caller (widget.incomingOffer == null) logs the call summary message.
-    // If the callee logs it, the server attributes the message to the callee, making it
-    // appear as if the callee called the caller!
-    if (widget.incomingOffer != null) return;
+    // CRITICAL: Only the caller logs the call summary message.
+    // If the callee logs it, the server attributes the message to the callee,
+    // making it appear as if the callee called the caller!
+    if (!_isCaller) return;
 
     _messageSent = true;
     try {
-      final auth = context.read<AuthProvider>();
-      final convos = context.read<ConversationProvider>();
-      await convos.sendMessage(
-        auth,
+      await _convos.sendMessage(
+        _auth,
         widget.conversationId,
         _callContent(outcome),
         type: app_msg.MessageType.CALL,
@@ -92,49 +106,49 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
+  // ── Lifecycle ────────────────────────────────────────────────────────────
+
   @override
   void initState() {
     super.initState();
-    _initRenderers();
+    _auth = context.read<AuthProvider>();
+    _convos = context.read<ConversationProvider>();
+    _initCall();
   }
 
-  Future<void> _initRenderers() async {
+  Future<void> _initCall() async {
+    // Ringtone belongs to the incoming UI; make sure it's off now that the
+    // call screen is open. (CallKit UI is already dismissed by CallKitService.)
+    unawaited(CallRingtoneService.stop());
+
     await _localRenderer.initialize();
     await _remoteRenderer.initialize();
-
-    // Force audio to loudspeaker immediately on call start.
-    if (!widget.isVideo) {
-      try {
-        await Helper.setSpeakerphoneOn(true);
-      } catch (e) {
-        debugPrint('[CallScreen] setSpeakerphoneOn error: $e');
-      }
-    }
-
-    // Play ringback for the caller while waiting for answer.
-    if (widget.incomingOffer == null) {
-      CallRingtoneService.playRingback();
-    }
+    if (!mounted) return;
 
     final sig = widget.signalingService;
 
-    _remoteSub = sig.onRemoteStream.stream.listen((stream) {
+    // Subscribe BEFORE starting/answering so no early event is missed.
+    _remoteSub = sig.onRemoteStream.stream.listen((stream) async {
+      // Remote stream arrived => call answered. Stop ringback.
+      _ringTimer?.cancel();
+      await CallRingtoneService.stop();
+      if (!mounted) return;
       setState(() {
         _remoteRenderer.srcObject = stream;
         _connected = true;
-        _ringing   = false;
+        _ringing = false;
       });
-      // Stop ringback as soon as remote stream arrives (call answered).
-      CallRingtoneService.stop();
       _startTimer();
     });
 
     _localSub = sig.onLocalStream.stream.listen((stream) {
+      if (!mounted) return;
       setState(() => _localRenderer.srcObject = stream);
     });
 
     _endedSub = sig.onCallEnded.stream.listen((type) async {
       // Remote side ended the call.
+      _ringTimer?.cancel();
       if (_connected) {
         await _sendCallMessage(_durationLabel);
       } else {
@@ -146,39 +160,102 @@ class _CallScreenState extends State<CallScreen> {
       _leave();
     });
 
-    if (widget.incomingOffer != null) {
-      // Callee: answer the incoming offer.
-      await sig.answerCall(
-          offerMsg: widget.incomingOffer!, video: widget.isVideo);
-    } else {
-      // Caller: initiate the call.
-      await sig.startCall(
-        remoteUserId:   widget.remoteUserId,
-        conversationId: widget.conversationId,
-        video:          widget.isVideo,
-      );
+    // Loudspeaker by default (voice AND video, matching the UI state).
+    try {
+      await Helper.setSpeakerphoneOn(true);
+    } catch (e) {
+      debugPrint('[CallScreen] setSpeakerphoneOn error: $e');
+    }
+    if (!mounted) return;
+
+    try {
+      if (_isCaller) {
+        // Ringback while waiting for the callee to answer.
+        await CallRingtoneService.playRingback();
+        _ringTimer = Timer(_ringTimeout, _onRingTimeout);
+
+        await sig.startCall(
+          remoteUserId: widget.remoteUserId,
+          conversationId: widget.conversationId,
+          video: widget.isVideo,
+        );
+      } else {
+        await sig.answerCall(
+            offerMsg: widget.incomingOffer!, video: widget.isVideo);
+      }
+    } catch (e) {
+      // Typically: camera/mic permission denied or signaling failure.
+      debugPrint('[CallScreen] call setup failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not start the call.')),
+        );
+      }
+      try {
+        await sig.hangup();
+      } catch (_) {}
+      _leave();
     }
   }
 
   void _startTimer() {
+    _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       setState(() => _elapsed += const Duration(seconds: 1));
     });
   }
 
-  Future<void> _leave() async {
-    _timer?.cancel();
-    if (mounted) Navigator.of(context).pop();
+  /// Caller waited too long with no answer.
+  Future<void> _onRingTimeout() async {
+    if (_connected || _leaving) return;
+    await _hangup(outcomeOverride: 'MISSED');
   }
 
-  Future<void> _hangup() async {
+  Future<void> _leave() async {
+    if (_leaving) return; // hangup() + onCallEnded can both land here
+    _leaving = true;
+
+    _timer?.cancel();
+    _ringTimer?.cancel();
+    if (!mounted) return;
+
+    try {
+      _convos.markCallEnded();
+    } catch (_) {}
+
+    final nav = Navigator.of(context);
+    if (nav.canPop()) {
+      nav.pop();
+    } else {
+      nav.pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => HomeScreen(
+            onThemeChanged: (_) {},
+            currentThemeMode: ThemeMode.system,
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _hangup({String? outcomeOverride}) async {
+    if (_leaving) return;
+    _ringTimer?.cancel();
+
     // Determine outcome before tearing down.
-    final outcome = _connected ? _durationLabel : 'CANCELLED';
-    await widget.signalingService.hangup();
+    final outcome =
+        outcomeOverride ?? (_connected ? _durationLabel : 'CANCELLED');
+    try {
+      await widget.signalingService.hangup();
+    } catch (e) {
+      debugPrint('[CallScreen] hangup error: $e');
+    }
     await _sendCallMessage(outcome);
     _leave();
   }
+
+  // ── Controls ─────────────────────────────────────────────────────────────
 
   void _toggleMute() {
     setState(() => _muted = !_muted);
@@ -200,69 +277,80 @@ class _CallScreenState extends State<CallScreen> {
 
   void _switchCamera() => widget.signalingService.switchCamera();
 
-  String get _elapsedLabel {
-    final m = _elapsed.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final s = _elapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$m:$s';
-  }
-
   @override
   void dispose() {
     _timer?.cancel();
-    _remoteSub.cancel();
-    _localSub.cancel();
-    _endedSub.cancel();
+    _ringTimer?.cancel();
+    _remoteSub?.cancel();
+    _localSub?.cancel();
+    _endedSub?.cancel();
     _localRenderer.dispose();
     _remoteRenderer.dispose();
-    // Stop ringtone/ringback and restore default audio route.
     CallRingtoneService.stop();
+    CallKitService.endAllCalls();
     Helper.setSpeakerphoneOn(false).catchError((_) {});
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(fit: StackFit.expand, children: [
-        // ── Remote video (full screen) / avatar fallback ─────────────────
-        if (widget.isVideo && _connected)
-          RTCVideoView(_remoteRenderer, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
-        else
-          _CallerBackground(name: widget.remoteName, ringing: _ringing, elapsed: _elapsedLabel, connected: _connected),
+    // System back = hang up. Otherwise the screen disappears while the call
+    // (and mic/camera) keeps running with no UI.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _hangup();
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(fit: StackFit.expand, children: [
+          // ── Remote video (full screen) / avatar fallback ───────────────
+          if (widget.isVideo && _connected)
+            RTCVideoView(_remoteRenderer,
+                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
+          else
+            _CallerBackground(
+              name: widget.remoteName,
+              ringing: _ringing,
+              elapsed: _durationLabel,
+              connected: _connected,
+            ),
 
-        // ── Local video (picture-in-picture) ─────────────────────────────
-        if (widget.isVideo && !_cameraOff)
+          // ── Local video (picture-in-picture) ───────────────────────────
+          if (widget.isVideo && !_cameraOff)
+            Positioned(
+              right: 16,
+              top: MediaQuery.of(context).padding.top + 16,
+              width: 100,
+              height: 140,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: RTCVideoView(_localRenderer,
+                    mirror: true,
+                    objectFit:
+                    RTCVideoViewObjectFit.RTCVideoViewObjectFitCover),
+              ),
+            ),
+
+          // ── Control bar ────────────────────────────────────────────────
           Positioned(
-            right: 16,
-            top: MediaQuery.of(context).padding.top + 16,
-            width: 100,
-            height: 140,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: RTCVideoView(_localRenderer,
-                  mirror: true,
-                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover),
+            left: 0,
+            right: 0,
+            bottom: MediaQuery.of(context).padding.bottom + 32,
+            child: _ControlBar(
+              muted: _muted,
+              cameraOff: _cameraOff,
+              speakerOn: _speakerOn,
+              isVideo: widget.isVideo,
+              onMute: _toggleMute,
+              onSpeaker: !widget.isVideo ? _toggleSpeaker : null,
+              onCameraToggle: widget.isVideo ? _toggleCamera : null,
+              onSwitchCamera: widget.isVideo ? _switchCamera : null,
+              onHangup: _hangup,
             ),
           ),
-
-        // ── Control bar ───────────────────────────────────────────────────
-        Positioned(
-          left: 0, right: 0,
-          bottom: MediaQuery.of(context).padding.bottom + 32,
-          child: _ControlBar(
-            muted:         _muted,
-            cameraOff:     _cameraOff,
-            speakerOn:     _speakerOn,
-            isVideo:       widget.isVideo,
-            onMute:         _toggleMute,
-            onSpeaker:      !widget.isVideo ? _toggleSpeaker : null,
-            onCameraToggle: widget.isVideo ? _toggleCamera : null,
-            onSwitchCamera: widget.isVideo ? _switchCamera : null,
-            onHangup:       _hangup,
-          ),
-        ),
-      ]),
+        ]),
+      ),
     );
   }
 }
@@ -299,13 +387,17 @@ class _CallerBackground extends StatelessWidget {
             backgroundColor: Colors.white24,
             child: Text(
               name.isNotEmpty ? name[0].toUpperCase() : '?',
-              style: const TextStyle(fontSize: 44, color: Colors.white,
+              style: const TextStyle(
+                  fontSize: 44,
+                  color: Colors.white,
                   fontWeight: FontWeight.bold),
             ),
           ),
           const SizedBox(height: 20),
           Text(name,
-              style: const TextStyle(fontSize: 24, color: Colors.white,
+              style: const TextStyle(
+                  fontSize: 24,
+                  color: Colors.white,
                   fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           Text(
@@ -394,11 +486,11 @@ class _CtrlBtn extends StatelessWidget {
   final VoidCallback onTap;
   final bool active;
 
-  const _CtrlBtn({
-      required this.icon,
-      required this.label,
-      required this.onTap,
-      this.active = false});
+  const _CtrlBtn(
+      {required this.icon,
+        required this.label,
+        required this.onTap,
+        this.active = false});
 
   @override
   Widget build(BuildContext context) {

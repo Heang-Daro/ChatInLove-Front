@@ -6,13 +6,12 @@ import 'package:love_in_chat/model/Response/ConversationResponse.dart';
 import 'package:love_in_chat/model/emun/ConversationType.dart';
 import '../provider/AuthProvider.dart';
 import '../provider/ConversationProvider.dart';
+import '../service/CallKitService.dart';
 import '../service/NotificationService.dart';
 import '../util/AppBarStyle.dart';
 import 'ChatRequestScreen.dart';
 import 'ChatSearchDelegate.dart';
 import 'CreateGroupScreen.dart';
-import 'IncomingCallScreen.dart';
-import 'IncomingGroupCallScreen.dart';
 import 'ProfileScreen.dart';
 import 'setting_util/SettingScreen.dart';
 import 'home_body/all.dart';
@@ -68,47 +67,58 @@ class _HomeScreenState extends State<HomeScreen> {
       };
 
       conversationProvider.initSocket(authProvider);
-      // Listen for incoming WebRTC calls and show the ringing overlay.
+
+      // Initialize CallKit event listeners and check cold-start active calls
+      CallKitService.initializeEventListeners(conversationProvider.callSignaling);
+      CallKitService.checkActiveCallsOnLaunch(conversationProvider.callSignaling);
+      CallKitService.requestPermissions();
+
+      // Listen for incoming WebRTC calls and show the unified CallKit UI.
       conversationProvider.onIncomingCall = (offer) {
         if (!mounted) return;
-        final fromId = offer['fromUserId']?.toString() ?? '';
-        final isGroup = offer['isGroup'] == true;
+
+        final fromId = (offer['fromUserId'] ?? offer['callerUserId'])?.toString() ?? '';
+        final localUserId = context.read<AuthProvider>().currentUserId ?? '';
+        final localUsername = context.read<AuthProvider>().currentUser?.username ?? '';
+
+        // LOOPBACK GUARD: Ignore calls initiated by ourselves
+        if (fromId.isEmpty || fromId == localUserId) {
+          debugPrint('[HomeScreen] Ignoring self-incoming call offer from $fromId');
+          return;
+        }
+
+        final isGroup = offer['isGroup'] == true || offer['type']?.toString() == 'GROUP_CALL_STARTED';
+        final convId = offer['conversationId']?.toString() ?? '';
+        final callType = offer['callType']?.toString().toUpperCase();
 
         if (isGroup) {
-          // ── Incoming group call — show Join/Decline overlay first ────────
-          final convId       = offer['conversationId']?.toString() ?? '';
-          final callerUserId = (offer['fromUserId'] ?? offer['callerUserId'])?.toString() ?? '';
-          final callType     = offer['callType']?.toString().toUpperCase();
-
-          String callerName = callerUserId;
+          // ── Incoming group call — trigger unified CallKit UI ──────────────
           final conv = conversationProvider.conversations
               .where((c) => c.id == convId)
               .firstOrNull;
+
+          String callerName = fromId;
           final callerMember = conv?.members
-              .where((m) => m.userId == callerUserId)
+              .where((m) => m.userId == fromId)
               .firstOrNull;
           if (callerMember != null) callerName = callerMember.username;
 
-          final localUserId = context.read<AuthProvider>().currentUserId ?? '';
-          final localUsername = context.read<AuthProvider>().currentUser?.username ?? '';
+          final groupName = conv?.name ?? 'Group Call';
 
-          // Push the ringing overlay — member taps Join to actually enter the call.
-          Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => IncomingGroupCallScreen(
-              conversationId: convId,
-              groupName:      conv?.name ?? 'Group call',
-              isVideo:        callType == 'VIDEO',
-              localUserId:    localUserId,
-              callerUserId:   callerUserId,
-              callerUsername: callerName,
-              localUsername:  localUsername,
-            ),
-          ));
-          // NOTE: no markCallEnded() here — the overlay releases the call slot
-          // itself when it is dismissed without joining, and the call screen
-          // releases it when the call ends.
+          final offerWithDetails = Map<String, dynamic>.from(offer);
+          offerWithDetails['isGroup'] = true;
+          offerWithDetails['callerName'] = '$callerName ($groupName)';
+          offerWithDetails['groupName'] = groupName;
+          offerWithDetails['fromUserId'] = fromId;
+          offerWithDetails['callerUserId'] = fromId;
+          offerWithDetails['conversationId'] = convId;
+          offerWithDetails['callType'] = callType ?? 'AUDIO';
+          offerWithDetails['localUserId'] = localUserId;
+          offerWithDetails['localUsername'] = localUsername;
+
+          CallKitService.showIncomingCall(offerWithDetails);
         } else {
-          // ── Incoming 1-to-1 call ─────────────────────────────────────────
+          // ── Incoming 1-to-1 call — trigger unified CallKit UI ──────────────
           String callerName = fromId;
           for (final c in conversationProvider.conversations) {
             final member = c.members
@@ -116,13 +126,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 .firstOrNull;
             if (member != null) { callerName = member.username; break; }
           }
-          Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => IncomingCallScreen(
-              offer: offer,
-              callerName: callerName,
-              signalingService: conversationProvider.callSignaling,
-            ),
-          )).whenComplete(() => conversationProvider.markCallEnded());
+          final offerWithDetails = Map<String, dynamic>.from(offer);
+          offerWithDetails['callerName'] = callerName;
+          offerWithDetails['fromUserId'] = fromId;
+          CallKitService.showIncomingCall(offerWithDetails);
         }
       };
       try {

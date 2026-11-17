@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import 'package:love_in_chat/api/api.dart';
 import 'package:love_in_chat/screen/message/GroupCallMessageCard.dart';
+import 'package:love_in_chat/screen/message/VideoMessageBubble.dart';
 import 'package:love_in_chat/screen/message/VoiceMessageBubble.dart';
 import 'package:love_in_chat/screen/message/message_shortcuts.dart';
 import 'package:provider/provider.dart';
@@ -285,50 +286,9 @@ class _ConversationBodyState extends State<ConversationBody> {
         );
 
       case MessageType.VIDEO:
-        return Stack(
-          alignment: Alignment.center,
-          children: [
-            Container(
-              width: 250,
-              height: 160,
-              decoration: BoxDecoration(
-                color: Colors.black87,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: const Stack(
-                alignment: Alignment.center,
-                children: [
-                  Icon(Icons.play_circle_fill_rounded, size: 54, color: Colors.white70),
-                  Positioned(
-                    bottom: 8,
-                    left: 10,
-                    child: Row(
-                      children: [
-                        Icon(Icons.videocam, size: 14, color: Colors.white70),
-                        SizedBox(width: 4),
-                        Text("Video", style: TextStyle(color: Colors.white70, fontSize: 11)),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Positioned(
-              bottom: 6,
-              right: 8,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.5),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  timeString,
-                  style: const TextStyle(color: Colors.white, fontSize: 10),
-                ),
-              ),
-            ),
-          ],
+        return VideoMessageBubble(
+          videoUrl: message.mediaUrl,
+          isMe: isMe,
         );
 
       case MessageType.FILE:

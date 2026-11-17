@@ -26,6 +26,12 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>voip</string>
+		<string>remote-notification</string>
+		<string>processing</string>
+	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Love In Chat needs camera access so you can take photos and record videos to send in chats.</string>
 	<key>NSMicrophoneUsageDescription</key>

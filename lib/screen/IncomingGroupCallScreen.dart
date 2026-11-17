@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
+import 'package:love_in_chat/service/CallKitService.dart';
 import 'package:love_in_chat/service/CallRingtoneService.dart';
 import 'package:love_in_chat/service/StompService.dart';
 import 'GroupCallScreen.dart';
@@ -51,12 +52,9 @@ class _IncomingGroupCallScreenState extends State<IncomingGroupCallScreen> {
 
   @override
   void dispose() {
-    // When joining we must NOT stop the ringtone here: the call screen starts
-    // its own tone and this overlay is disposed after it.
     if (!_joined) {
       CallRingtoneService.stop();
-      // The overlay was dismissed without joining (decline / back button) —
-      // release the call slot so the next incoming call can be shown.
+      CallKitService.endAllCalls();
       _convos.markCallEnded();
     }
     super.dispose();
@@ -65,7 +63,7 @@ class _IncomingGroupCallScreenState extends State<IncomingGroupCallScreen> {
   void _join() {
     _joined = true;
     CallRingtoneService.stop();
-    // Replace this overlay with the actual call screen.
+    CallKitService.endAllCalls();
     Navigator.of(context).pushReplacement(MaterialPageRoute(
       builder: (_) => GroupCallScreen(
         conversationId: widget.conversationId,
@@ -80,7 +78,7 @@ class _IncomingGroupCallScreenState extends State<IncomingGroupCallScreen> {
 
   void _decline() {
     CallRingtoneService.stop();
-    // Tell the caller this member declined so they don't wait forever.
+    CallKitService.endAllCalls();
     try {
       StompService().sendSignal(widget.callerUserId, {
         'type':            'DECLINE_CALL',

@@ -1,3 +1,5 @@
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:love_in_chat/data/database/app_database.dart';
 import 'package:love_in_chat/data/repositories/chat_repository.dart';
@@ -6,12 +8,20 @@ import 'package:love_in_chat/provider/ConversationProvider.dart';
 import 'package:love_in_chat/screen/HomeScreen.dart';
 import 'package:love_in_chat/screen/LoginScreen.dart';
 import 'package:love_in_chat/service/CacheService.dart';
+import 'package:love_in_chat/service/CallKitService.dart';
 import 'package:love_in_chat/service/ChatAppearanceService.dart';
 import 'package:love_in_chat/service/NotificationService.dart';
 import 'package:provider/provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await Firebase.initializeApp();
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  } catch (e) {
+    debugPrint('[Firebase] Initialization skipped or error: $e');
+  }
+
   await NotificationService.initialize();
   await CacheService.init();
   await ChatAppearanceService.initialize();
@@ -54,6 +64,7 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey,
       title: 'In Love',
       debugShowCheckedModeBanner: false,
       themeMode: _themeMode,

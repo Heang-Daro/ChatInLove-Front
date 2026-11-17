@@ -6,6 +6,8 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:stomp_dart_client/stomp_frame.dart';
 
 import 'StompService.dart';
+import 'CallKitService.dart';
+import 'CallRingtoneService.dart';
 
 // ── Signal types ──────────────────────────────────────────────────────────────
 enum SignalType {
@@ -144,10 +146,8 @@ class CallSignalingService {
 
     switch (type) {
       case SignalType.callOffer:
-        // Fix 1 — loopback guard: only trigger incoming call UI if the offer
-        // came from someone ELSE. The caller also receives their own signal
-        // stamped with their userId — this guard stops them hearing a ringtone.
-        if (msg['fromUserId'] != localUserId) {
+        final fromId = (msg['fromUserId'] ?? msg['callerUserId'])?.toString();
+        if (fromId != null && fromId.isNotEmpty && fromId != localUserId) {
           onIncomingCall.add(msg);
         }
         break;
@@ -163,6 +163,7 @@ class CallSignalingService {
       case SignalType.callBusy:
         _teardown();
         onCallEnded.add(type);
+        CallKitService.endAllCalls();
         break;
     }
   }
@@ -183,6 +184,7 @@ class CallSignalingService {
     required String conversationId,
     bool video = false,
   }) async {
+    await _teardown();
     _remoteUserId    = remoteUserId;
     _conversationId  = conversationId;
     _isOffer         = true;
@@ -214,7 +216,7 @@ class CallSignalingService {
     required Map<String, dynamic> offerMsg,
     bool video = false,
   }) async {
-    // Store server-assigned session ID for accept/reject.
+    await _teardown();
     _callSessionId  = offerMsg['callSessionId']?.toString();
     _remoteUserId   = offerMsg['fromUserId']?.toString();
     _conversationId = offerMsg['conversationId']?.toString();
@@ -309,6 +311,9 @@ class CallSignalingService {
   }
 
   void _handleAnswer(Map<String, dynamic> msg) async {
+    await CallRingtoneService.stop();
+    await CallKitService.endAllCalls();
+
     final sdpMap = msg['sdp'] as Map<String, dynamic>?;
     if (sdpMap == null || _pc == null) return;
     final answer = RTCSessionDescription(

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../provider/AuthProvider.dart';
 import '../provider/ConversationProvider.dart';
+import '../service/CallKitService.dart';
 import 'RegisterScreen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -46,6 +47,8 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!mounted) return;
     if (success) {
       conversationProvider.initSocket(authProvider);
+      CallKitService.requestPermissions();
+      authProvider.syncPushTokens();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
