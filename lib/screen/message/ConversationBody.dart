@@ -1,16 +1,19 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-
-import 'package:love_in_chat/api/api.dart';
-import 'package:love_in_chat/screen/message/GroupCallMessageCard.dart';
-import 'package:love_in_chat/screen/message/VideoMessageBubble.dart';
-import 'package:love_in_chat/screen/message/VoiceMessageBubble.dart';
-import 'package:love_in_chat/screen/message/message_shortcuts.dart';
 import 'package:provider/provider.dart';
+
 import 'package:love_in_chat/model/Response/MessageResponse.dart';
 import 'package:love_in_chat/model/emun/MessageType.dart';
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
+import 'package:love_in_chat/screen/message/CallMessageBubble.dart';
+import 'package:love_in_chat/screen/message/FileMessageBubble.dart';
+import 'package:love_in_chat/screen/message/GroupCallMessageCard.dart';
+import 'package:love_in_chat/screen/message/ImageMessageBubble.dart';
+import 'package:love_in_chat/screen/message/MessageOptionsSheet.dart';
+import 'package:love_in_chat/screen/message/SystemMessageBubble.dart';
+import 'package:love_in_chat/screen/message/VideoMessageBubble.dart';
+import 'package:love_in_chat/screen/message/VoiceMessageBubble.dart';
+import 'package:love_in_chat/screen/message/message_shortcuts.dart';
 import '../../util/AnimatedComponents.dart';
 
 class ConversationBody extends StatefulWidget {
@@ -71,213 +74,10 @@ class _ConversationBodyState extends State<ConversationBody> {
     }
   }
 
-  void _showMessageOptions(BuildContext context, MessageResponse message, bool isMe) {
-    final isText = message.type == MessageType.TEXT;
-
-    AnimatedBottomSheet.show(
-      context: context,
-      isScrollControlled: false,
-      builder: (ctx) => SafeArea(
-        child: Container(
-          decoration: BoxDecoration(
-            color: Theme.of(context).cardColor,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 36,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 12),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade400,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              // Copy message option
-              ListTile(
-                leading: const Icon(Icons.copy_rounded, color: Colors.pinkAccent),
-                title: const Text("Copy Text"),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  Clipboard.setData(ClipboardData(text: message.content));
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text("Copied to clipboard"),
-                      duration: Duration(seconds: 1),
-                    ),
-                  );
-                },
-              ),
-              // Edit option (Only for sender and text messages)
-              if (isMe && isText)
-                ListTile(
-                  leading: const Icon(Icons.edit_rounded, color: Colors.blueAccent),
-                  title: const Text("Edit Message"),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _startEditing(message);
-                  },
-                ),
-              // Delete option (Only for sender)
-              if (isMe)
-                ListTile(
-                  leading: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
-                  title: const Text("Delete Message", style: TextStyle(color: Colors.redAccent)),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _confirmDelete(context, message);
-                  },
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _confirmDelete(BuildContext context, MessageResponse message) {
-    AnimatedDialog.show(
-      context: context,
-      builder: (dialogCtx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text("Delete Message?"),
-        content: const Text("Are you sure you want to delete this message? This action cannot be undone."),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx),
-            child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.redAccent,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-            onPressed: () async {
-              Navigator.pop(dialogCtx);
-              final authProvider = context.read<AuthProvider>();
-              final convoProvider = context.read<ConversationProvider>();
-              final success = await convoProvider.deleteMessage(authProvider, message.id);
-              if (!mounted) return;
-              if (!success) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("Failed to delete message. Please try again."),
-                    backgroundColor: Colors.redAccent,
-                  ),
-                );
-              }
-            },
-            child: const Text("Delete", style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildMessageContent(BuildContext context, MessageResponse message, bool isMe) {
-    final String timeString = message.createdAt != null
-        ? "${message.createdAt!.toLocal().hour.toString().padLeft(2, '0')}:${message.createdAt!.toLocal().minute.toString().padLeft(2, '0')}"
-        : "";
-
     switch (message.type) {
       case MessageType.IMAGE:
-        return Stack(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: GestureDetector(
-                onTap: () {
-                  AnimatedDialog.show(
-                    context: context,
-                    builder: (_) => Dialog(
-                      backgroundColor: Colors.transparent,
-                      insetPadding: const EdgeInsets.all(8),
-                      child: Stack(
-                        alignment: Alignment.topRight,
-                        children: [
-                          InteractiveViewer(
-                            child: Image.network(
-                              message.mediaUrl,
-                              errorBuilder: (context, error, stackTrace) => const Padding(
-                                padding: EdgeInsets.all(20.0),
-                                child: Icon(Icons.broken_image, size: 64, color: Colors.white70),
-                              ),
-                            ),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.close, color: Colors.white, size: 30),
-                            onPressed: () => Navigator.pop(context),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                },
-                child: Image.network(
-                  message.mediaUrl,
-                  width: 250,
-                  height: 200,
-                  fit: BoxFit.cover,
-                  loadingBuilder: (context, child, loadingProgress) {
-                    if (loadingProgress == null) return child;
-                    return Container(
-                      width: 250,
-                      height: 200,
-                      color: isMe ? Colors.pink.shade300 : Colors.grey.shade300,
-                      child: const Center(
-                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                      ),
-                    );
-                  },
-                  errorBuilder: (context, error, stackTrace) => Container(
-                    width: 250,
-                    height: 140,
-                    color: Colors.grey.shade300,
-                    child: const Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.broken_image, color: Colors.grey, size: 32),
-                        SizedBox(height: 4),
-                        Text("Image unavailable", style: TextStyle(fontSize: 12, color: Colors.grey)),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            Positioned(
-              bottom: 6,
-              right: 8,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.5),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      timeString,
-                      style: const TextStyle(color: Colors.white, fontSize: 10),
-                    ),
-                    if (isMe) ...[
-                      const SizedBox(width: 3),
-                      Icon(
-                        message.isRead ? Icons.done_all : Icons.done,
-                        size: 12,
-                        color: Colors.white,
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ],
-        );
+        return ImageMessageBubble(message: message, isMe: isMe);
 
       case MessageType.VOICE:
         return VoiceMessageBubble(
@@ -292,72 +92,16 @@ class _ConversationBodyState extends State<ConversationBody> {
         );
 
       case MessageType.FILE:
-        final fileName = fileNameFromUrl(message.content);
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: isMe ? Colors.white24 : Colors.pink.shade50,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(
-                Icons.insert_drive_file_rounded,
-                color: isMe ? Colors.white : Colors.pinkAccent,
-                size: 26,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Flexible(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    fileName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13,
-                      color: isMe ? Colors.white : Theme.of(context).textTheme.bodyLarge?.color,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    "Attachment Document",
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: isMe ? Colors.white70 : Colors.grey,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        );
+        return FileMessageBubble(message: message, isMe: isMe);
 
       case MessageType.CALL:
         if (GroupCallMessageCard.isGroupCallMessage(message.content)) {
           return GroupCallMessageCard(message: message, isMe: isMe);
         }
-        return _CallBubble(content: message.content, isMe: isMe);
+        return CallMessageBubble(content: message.content, isMe: isMe);
 
       case MessageType.SYSTEM:
-        return Center(
-          child: Container(
-            margin: const EdgeInsets.symmetric(vertical: 6),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.grey.shade300,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Text(
-              message.content,
-              style: const TextStyle(fontSize: 11, color: Colors.black87),
-            ),
-          ),
-        );
+        return SystemMessageBubble(message: message);
 
       case MessageType.TEXT:
       default:
@@ -477,7 +221,6 @@ class _ConversationBodyState extends State<ConversationBody> {
             padding: const EdgeInsets.all(12),
             itemCount: totalItemCount,
             itemBuilder: (context, index) {
-              // Show loading older messages indicator at top of reverse list (end of indices)
               if (convoProvider.isLoadingMoreMessages && index == totalItemCount - 1) {
                 return const Center(
                   child: Padding(
@@ -524,7 +267,12 @@ class _ConversationBodyState extends State<ConversationBody> {
                 child: Align(
                   alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                   child: GestureDetector(
-                    onLongPress: () => _showMessageOptions(context, message, isMe),
+                    onLongPress: () => MessageOptionsSheet.showOptions(
+                      context: context,
+                      message: message,
+                      isMe: isMe,
+                      onStartEditing: () => _startEditing(message),
+                    ),
                     child: Container(
                       margin: const EdgeInsets.symmetric(vertical: 4),
                       padding: isMedia
@@ -607,94 +355,6 @@ class _ConversationBodyState extends State<ConversationBody> {
           );
         },
       ),
-    );
-  }
-}
-
-// ── Call bubble ───────────────────────────────────────────────────────────────
-class _CallBubble extends StatelessWidget {
-  final String content;
-  final bool isMe;
-
-  const _CallBubble({required this.content, required this.isMe});
-
-  @override
-  Widget build(BuildContext context) {
-    final parts = content.split(':');
-    final kind = parts.isNotEmpty ? parts[0].toUpperCase() : 'AUDIO';
-    final rest = parts.length > 1 ? parts.sublist(1).join(':') : '';
-
-    final isVideo     = kind == 'VIDEO';
-    final isMissed    = rest == 'MISSED';
-    final isDeclined  = rest == 'REJECTED';
-    final isCancelled = rest == 'CANCELLED';
-    final notConnected = isMissed || isDeclined || isCancelled;
-
-    final Color fgColor  = isMe ? Colors.white : Colors.pinkAccent;
-    final Color dimColor = isMe
-        ? Colors.white70
-        : Theme.of(context).colorScheme.onSurfaceVariant;
-
-    final IconData icon;
-    final String label;
-
-    if (notConnected) {
-      icon = isMe ? Icons.call_missed_outgoing_rounded : Icons.phone_missed_rounded;
-      if (isMissed) {
-        label = isMe
-            ? (isVideo ? 'No answer' : 'No answer')
-            : (isVideo ? 'Missed video call' : 'Missed voice call');
-      } else if (isDeclined) {
-        label = isMe
-            ? (isVideo ? 'Call declined' : 'Call declined')
-            : (isVideo ? 'Declined video call' : 'Declined voice call');
-      } else {
-        label = isMe
-            ? (isVideo ? 'Cancelled call' : 'Cancelled call')
-            : (isVideo ? 'Missed video call' : 'Missed voice call');
-      }
-    } else {
-      icon = isVideo
-          ? Icons.videocam_rounded
-          : (isMe ? Icons.call_made_rounded : Icons.call_received_rounded);
-      label = isMe
-          ? (isVideo ? 'Outgoing video call' : 'Outgoing voice call')
-          : (isVideo ? 'Incoming video call' : 'Incoming voice call');
-    }
-
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(
-          icon,
-          size: 20,
-          color: notConnected
-              ? Colors.redAccent.withValues(alpha: isMe ? 0.9 : 1.0)
-              : fgColor,
-        ),
-        const SizedBox(width: 8),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                color: fgColor,
-                fontWeight: FontWeight.w600,
-                fontSize: 14,
-              ),
-            ),
-            if (!notConnected && rest.isNotEmpty) ...[
-              const SizedBox(height: 2),
-              Text(
-                rest,
-                style: TextStyle(fontSize: 11, color: dimColor),
-              ),
-            ],
-          ],
-        ),
-      ],
     );
   }
 }

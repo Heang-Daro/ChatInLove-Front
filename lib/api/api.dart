@@ -47,20 +47,17 @@ String resolveFileUrl(String content) {
   final value = content.trim();
   if (value.isEmpty) return content;
 
-  // ប្រសិនបើវាជា Supabase URL រួចស្រេចហើយ គឺទាញយកទៅប្រើប្រាស់ផ្ទាល់តែម្ដង មិនបាច់ប្រែប្រួលទេ!
-  if (value.contains('supabase.co')) {
+  // Preserve absolute HTTP/HTTPS URLs (Supabase Storage, CDNs, external storage)
+  if (value.startsWith('http://') || value.startsWith('https://')) {
     return value;
   }
 
-  // Relative path សម្រាប់ Server ចាស់ (ប្រសិនបើមាន)
-  if (value.startsWith('/')) return '$REST_URL$value';
+  // Prepend current REST server base URL to relative server paths
+  if (value.startsWith('/')) {
+    return '$REST_URL$value';
+  }
 
-  final uri = Uri.tryParse(value);
-  if (uri == null || !uri.hasScheme || uri.host.isEmpty) return value;
-
-  final path = uri.path.isEmpty ? '/' : uri.path;
-  final query = uri.hasQuery ? '?${uri.query}' : '';
-  return '$REST_URL$path$query';
+  return value;
 }
 
 /// File name shown for a FILE message (works with relative paths and with

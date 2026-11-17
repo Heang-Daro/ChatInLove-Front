@@ -924,15 +924,7 @@ class ConversationProvider extends ChangeNotifier {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        String fileUrl = data['url'] ?? '';
-
-        // 🛑 កន្លែងនេះហើយដែលធ្វើឱ្យវាបាត់ Supabase Domain!
-        if (fileUrl.startsWith('http://') || fileUrl.startsWith('https://')) {
-          final parsed = Uri.tryParse(fileUrl);
-          if (parsed != null && parsed.path.isNotEmpty) {
-            fileUrl = parsed.path + (parsed.hasQuery ? '?${parsed.query}' : '');
-          }
-        }
+        String fileUrl = data['url'] ?? data['fileUrl'] ?? '';
 
         MessageType msgType = overrideType ?? MessageType.FILE;
         if (overrideType == null && data['messageType'] != null) {

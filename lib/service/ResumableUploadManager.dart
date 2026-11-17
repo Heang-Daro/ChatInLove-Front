@@ -8,7 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:love_in_chat/api/api.dart';
 import 'package:love_in_chat/model/emun/MessageType.dart';
-import 'package:love_in_chat/service/StompService.dart';
+
 
 /// Progress information for an active or queued upload.
 class UploadProgressInfo {
@@ -165,8 +165,7 @@ class ResumableUploadManager {
         remoteUrl: remoteUrl,
       ));
 
-      // Dispatch STOMP message
-      StompService().sendMessage(conversationId, remoteUrl);
+      // Upload completed successfully
       return remoteUrl;
     } else {
       _emitProgress(UploadProgressInfo(

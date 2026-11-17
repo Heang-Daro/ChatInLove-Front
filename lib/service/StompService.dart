@@ -5,6 +5,7 @@ import 'package:stomp_dart_client/stomp_config.dart';
 import 'package:stomp_dart_client/stomp_frame.dart';
 import 'package:love_in_chat/api/api.dart';
 import 'package:love_in_chat/model/Response/MessageResponse.dart';
+import 'package:love_in_chat/model/emun/MessageType.dart';
 import 'package:love_in_chat/provider/AuthProvider.dart';
 
 class StompService {
@@ -209,15 +210,19 @@ class StompService {
   }
 
   // NEW: Added method to send messages easily from Flutter UI
-  void sendMessage(String conversationId, String content) {
+  void sendMessage(String conversationId, String content, {MessageType? type}) {
     if (_isConnected && _stompClient != null) {
+      final bodyMap = <String, dynamic>{
+        'content': content,
+      };
+      if (type != null) {
+        bodyMap['type'] = type.name.toUpperCase();
+      }
       _stompClient!.send(
         destination: '/app/chat.send/$conversationId',
-        body: json.encode({
-          'content': content,
-        }),
+        body: json.encode(bodyMap),
       );
-      debugPrint('>>> SENT MESSAGE TO /app/chat.send/$conversationId <<<');
+      debugPrint('>>> SENT MESSAGE TO /app/chat.send/$conversationId (type: ${type?.name}) <<<');
     } else {
       debugPrint('Cannot send message: STOMP client is not connected.');
     }

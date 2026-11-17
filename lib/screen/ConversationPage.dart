@@ -238,20 +238,20 @@ class _ConversationPageState extends State<ConversationPage> {
     );
 
     bool success;
-    if (!kIsWeb) {
-      success = await context.read<ConversationProvider>().uploadResumableMedia(
-            context.read<AuthProvider>(),
-            widget.conversationId,
-            File(file.path),
-            overrideType: type,
-          );
-    } else {
+    if (type == MessageType.IMAGE || kIsWeb) {
       final bytes = await file.readAsBytes();
       success = await context.read<ConversationProvider>().uploadAndSendMessage(
             context.read<AuthProvider>(),
             widget.conversationId,
             bytes,
             file.name,
+            overrideType: type,
+          );
+    } else {
+      success = await context.read<ConversationProvider>().uploadResumableMedia(
+            context.read<AuthProvider>(),
+            widget.conversationId,
+            File(file.path),
             overrideType: type,
           );
     }
