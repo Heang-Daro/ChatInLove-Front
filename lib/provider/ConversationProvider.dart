@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -17,6 +18,7 @@ import '../service/AccountManager.dart';
 import '../service/CacheService.dart';
 import '../service/CallSignalingService.dart';
 import '../service/StompService.dart';
+import '../service/ResumableUploadManager.dart';
 import '../screen/message/GroupCallMessageCard.dart';
 import 'AuthProvider.dart';
 
@@ -863,6 +865,36 @@ class ConversationProvider extends ChangeNotifier {
     }
     notifyListeners();
     return false;
+  }
+
+  /// Resumable chunked upload with low memory usage and automatic resume.
+  Future<bool> uploadResumableMedia(
+    AuthProvider authProvider,
+    String conversationId,
+    File file, {
+    MessageType? overrideType,
+    Function(double progress)? onProgress,
+  }) async {
+    _errorMessage = null;
+    final token = authProvider.accessToken;
+    if (token == null) return false;
+
+    final mediaType = overrideType ?? MessageType.FILE;
+    final url = await ResumableUploadManager().uploadFile(
+      file: file,
+      conversationId: conversationId,
+      messageType: mediaType,
+      accessToken: token,
+      onProgress: onProgress,
+    );
+
+    if (url != null) {
+      return await sendMessage(authProvider, conversationId, url, type: mediaType);
+    } else {
+      _errorMessage = "Upload failed or interrupted. It will resume automatically.";
+      notifyListeners();
+      return false;
+    }
   }
 
   Future<bool> uploadAndSendMessage(

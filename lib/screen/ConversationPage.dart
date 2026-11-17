@@ -232,19 +232,30 @@ class _ConversationPageState extends State<ConversationPage> {
         : await _picker.pickVideo(source: source);
     if (file == null) return;
 
-    final bytes = await file.readAsBytes();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(type == MessageType.IMAGE ? 'Uploading image…' : 'Uploading video…')),
     );
 
-    final success = await context.read<ConversationProvider>().uploadAndSendMessage(
-          context.read<AuthProvider>(),
-          widget.conversationId,
-          bytes,
-          file.name,
-          overrideType: type,
-        );
+    bool success;
+    if (!kIsWeb) {
+      success = await context.read<ConversationProvider>().uploadResumableMedia(
+            context.read<AuthProvider>(),
+            widget.conversationId,
+            File(file.path),
+            overrideType: type,
+          );
+    } else {
+      final bytes = await file.readAsBytes();
+      success = await context.read<ConversationProvider>().uploadAndSendMessage(
+            context.read<AuthProvider>(),
+            widget.conversationId,
+            bytes,
+            file.name,
+            overrideType: type,
+          );
+    }
+
     if (!mounted || success) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Failed to upload ${type == MessageType.IMAGE ? 'image' : 'video'}.')),

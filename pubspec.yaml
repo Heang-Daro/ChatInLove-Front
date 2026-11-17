@@ -45,6 +45,8 @@ dependencies:
   firebase_messaging: ^15.2.0
   audioplayers: ^6.0.0
   video_player: ^2.11.1  # plays the video messages (Android / iOS / Web)
+  dio: ^5.7.0            # For resumable chunked streaming & byte-range downloads
+  crypto: ^3.0.6         # For SHA-256 integrity calculation
 
   # Offline-first local database (drift / SQLite)
   drift: ^2.35.4

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+import 'package:love_in_chat/api/api.dart';
 
 /// Messenger-style video message bubble.
 ///
@@ -37,11 +38,22 @@ class _VideoMessageBubbleState extends State<VideoMessageBubble> {
   VideoPlayerController? _controller;
   bool _initializing = false;
   bool _failed = false;
+  bool _isPlaying = false;
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
 
   bool get _hasPlayer => _controller?.value.isInitialized ?? false;
+
+  @override
+  void didUpdateWidget(covariant VideoMessageBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The bubble was reused for another message: drop the old player.
+    if (oldWidget.videoUrl != widget.videoUrl) {
+      _stop();
+      _failed = false;
+    }
+  }
 
   @override
   void dispose() {
@@ -50,24 +62,41 @@ class _VideoMessageBubbleState extends State<VideoMessageBubble> {
     super.dispose();
   }
 
+  /// Detaches and disposes the current controller (safe to call repeatedly).
   void _disposeController() {
     final controller = _controller;
     _controller = null;
     if (controller == null) return;
     controller.removeListener(_onTick);
-    unawaited(controller.pause());
     unawaited(controller.dispose());
   }
 
   void _onTick() {
     final controller = _controller;
     if (controller == null || !mounted) return;
-    final position = controller.value.position;
-    final duration = controller.value.duration;
-    if (position != _position || duration != _duration) {
+    final value = controller.value;
+
+    // Playback error after initialization.
+    if (value.hasError) {
+      if (_playing == this) _playing = null;
+      _disposeController();
       setState(() {
-        _position = position;
-        _duration = duration;
+        _initializing = false;
+        _failed = true;
+        _isPlaying = false;
+        _position = Duration.zero;
+        _duration = Duration.zero;
+      });
+      return;
+    }
+
+    if (value.position != _position ||
+        value.duration != _duration ||
+        value.isPlaying != _isPlaying) {
+      setState(() {
+        _position = value.position;
+        _duration = value.duration;
+        _isPlaying = value.isPlaying;
       });
     }
   }
@@ -85,35 +114,49 @@ class _VideoMessageBubbleState extends State<VideoMessageBubble> {
       _failed = false;
     });
 
-    VideoPlayerController? controller;
+    final resolved = resolveFileUrl(widget.videoUrl);
+    final controller = VideoPlayerController.networkUrl(
+      Uri.parse(resolved),
+      httpHeaders: const {'Accept-Ranges': 'bytes'},
+    );
+    _controller = controller;
+    controller.addListener(_onTick);
+
     try {
-      controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl));
-      _controller = controller;
-      controller.addListener(_onTick);
       await controller.initialize();
-      if (!mounted) {
-        controller.removeListener(_onTick);
-        await controller.dispose();
-        return;
-      }
-      await controller.play();
+
+      // Disposed or stopped while loading: dispose()/_stop() already
+      // released this controller, so just bail out.
+      if (!mounted || !identical(_controller, controller)) return;
+
+      // Claim the "currently playing" slot before awaiting play(), so a
+      // second bubble cannot slip in between.
+      final current = _playing;
+      if (current != null && current != this) current._stop();
       _playing = this;
+
+      await controller.play();
+      if (!mounted || !identical(_controller, controller)) return;
+
       setState(() {
         _initializing = false;
-        _position = controller!.value.position;
+        _isPlaying = controller.value.isPlaying;
+        _position = controller.value.position;
         _duration = controller.value.duration;
       });
     } catch (_) {
-      if (controller != null) {
-        controller.removeListener(_onTick);
-        await controller.dispose();
-      }
-      _controller = null;
-      if (mounted) {
-        setState(() {
-          _initializing = false;
-          _failed = true;
-        });
+      // Only clean up if this controller is still the active one;
+      // otherwise _stop()/dispose() already did.
+      if (identical(_controller, controller)) {
+        if (_playing == this) _playing = null;
+        _disposeController();
+        if (mounted) {
+          setState(() {
+            _initializing = false;
+            _failed = true;
+            _isPlaying = false;
+          });
+        }
       }
     }
   }
@@ -124,6 +167,8 @@ class _VideoMessageBubbleState extends State<VideoMessageBubble> {
     _disposeController();
     if (mounted) {
       setState(() {
+        _initializing = false;
+        _isPlaying = false;
         _position = Duration.zero;
         _duration = Duration.zero;
       });
@@ -138,17 +183,24 @@ class _VideoMessageBubbleState extends State<VideoMessageBubble> {
       await controller.pause();
       return;
     }
-    if (_playing != this) {
-      final other = _playing;
-      if (other != null && other != this) other._stop();
-      _playing = this;
+
+    final other = _playing;
+    if (other != null && other != this) other._stop();
+    _playing = this;
+
+    // Finished videos: start again from the beginning.
+    final value = controller.value;
+    if (value.duration > Duration.zero && value.position >= value.duration) {
+      await controller.seekTo(Duration.zero);
     }
+    if (!identical(_controller, controller)) return;
     await controller.play();
   }
 
   double get _progress {
     if (_duration.inMilliseconds <= 0) return 0;
-    return (_position.inMilliseconds / _duration.inMilliseconds).clamp(0.0, 1.0);
+    return (_position.inMilliseconds / _duration.inMilliseconds)
+        .clamp(0.0, 1.0);
   }
 
   String _fmt(Duration d) {
@@ -192,39 +244,47 @@ class _VideoMessageBubbleState extends State<VideoMessageBubble> {
       child: Center(
         child: _initializing
             ? const SizedBox(
-                width: 26,
-                height: 26,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
-              )
+          width: 26,
+          height: 26,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: Colors.white70,
+          ),
+        )
             : Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    _failed ? Icons.error_outline_rounded : Icons.videocam_rounded,
-                    color: _failed ? Colors.redAccent : Colors.white70,
-                    size: 34,
-                  ),
-                  const SizedBox(height: 6),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Text(
-                      _failed ? 'Tap to retry' : 'Tap to play',
-                      style: TextStyle(
-                        color: _failed ? Colors.redAccent : Colors.white70,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ),
-                ],
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              _failed
+                  ? Icons.error_outline_rounded
+                  : Icons.videocam_rounded,
+              color: _failed ? Colors.redAccent : Colors.white70,
+              size: 34,
+            ),
+            const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Text(
+                _failed ? 'Tap to retry' : 'Tap to play',
+                style: TextStyle(
+                  color: _failed ? Colors.redAccent : Colors.white70,
+                  fontSize: 11,
+                ),
               ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _centerButton() {
+    // While loading, the spinner is the only thing shown.
+    if (_initializing) return const SizedBox.shrink();
+
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: _failed || _initializing ? _start : _start,
+      onTap: _start,
       child: Container(
         color: Colors.black.withValues(alpha: 0.25),
         alignment: Alignment.center,
@@ -235,7 +295,11 @@ class _VideoMessageBubbleState extends State<VideoMessageBubble> {
             color: Colors.black.withValues(alpha: 0.45),
             shape: BoxShape.circle,
           ),
-          child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 34),
+          child: Icon(
+            _failed ? Icons.refresh_rounded : Icons.play_arrow_rounded,
+            color: Colors.white,
+            size: 34,
+          ),
         ),
       ),
     );
@@ -260,8 +324,6 @@ class _VideoMessageBubbleState extends State<VideoMessageBubble> {
 
   // ── Controls ──────────────────────────────────────────────────────────────
   Widget _controls(VideoPlayerController controller) {
-    final isPlaying = controller.value.isPlaying;
-
     return Stack(
       children: [
         // Tap anywhere on the video to play / pause.
@@ -293,7 +355,9 @@ class _VideoMessageBubbleState extends State<VideoMessageBubble> {
                 GestureDetector(
                   onTap: _togglePlayPause,
                   child: Icon(
-                    isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                    _isPlaying
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
                     color: Colors.white,
                     size: 22,
                   ),
@@ -306,7 +370,8 @@ class _VideoMessageBubbleState extends State<VideoMessageBubble> {
                       value: _progress,
                       minHeight: 3,
                       backgroundColor: Colors.white24,
-                      valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                      valueColor:
+                      const AlwaysStoppedAnimation<Color>(Colors.white),
                     ),
                   ),
                 ),
@@ -320,7 +385,11 @@ class _VideoMessageBubbleState extends State<VideoMessageBubble> {
                 const SizedBox(width: 4),
                 GestureDetector(
                   onTap: _stop,
-                  child: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
+                  child: const Icon(
+                    Icons.close_rounded,
+                    color: Colors.white,
+                    size: 18,
+                  ),
                 ),
               ],
             ),
