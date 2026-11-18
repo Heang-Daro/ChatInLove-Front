@@ -41,6 +41,17 @@ class _HomeScreenState extends State<HomeScreen> {
     const SettingScreen(),
   ];
 
+  /// បំប្លែង Nested Map (ដូចជា sdp) ឱ្យទៅជា Map<String, dynamic> សុទ្ធគ្រប់ជាន់
+  Map<String, dynamic> _deepNormalizeMap(dynamic raw) {
+    if (raw is Map) {
+      return raw.map((k, v) => MapEntry(
+        k.toString(),
+        v is Map ? _deepNormalizeMap(v) : v,
+      ));
+    }
+    return <String, dynamic>{};
+  }
+
   @override
   void initState() {
     super.initState();
@@ -51,7 +62,7 @@ class _HomeScreenState extends State<HomeScreen> {
       conversationProvider.onNewMessageNotification = (message) async {
         if (!_notificationsEnabled) return;
         final chat = conversationProvider.conversations.firstWhere(
-          (c) => c.id == message.conversationId,
+              (c) => c.id == message.conversationId,
           orElse: () => ConversationResponse(
             id: message.conversationId,
             type: ConversationType.PRIVATE,
@@ -74,20 +85,25 @@ class _HomeScreenState extends State<HomeScreen> {
       CallKitService.requestPermissions();
 
       // Listen for incoming WebRTC calls and show the unified CallKit UI.
-      conversationProvider.onIncomingCall = (offer) {
+      conversationProvider.onIncomingCall = (rawOffer) {
         if (!mounted) return;
 
-        final fromId = (offer['fromUserId'] ?? offer['callerUserId'])?.toString() ?? '';
+        final offer = _deepNormalizeMap(rawOffer);
+        final fromId =
+            (offer['fromUserId'] ?? offer['callerUserId'])?.toString() ?? '';
         final localUserId = context.read<AuthProvider>().currentUserId ?? '';
-        final localUsername = context.read<AuthProvider>().currentUser?.username ?? '';
+        final localUsername =
+            context.read<AuthProvider>().currentUser?.username ?? '';
 
         // LOOPBACK GUARD: Ignore calls initiated by ourselves
         if (fromId.isEmpty || fromId == localUserId) {
-          debugPrint('[HomeScreen] Ignoring self-incoming call offer from $fromId');
+          debugPrint(
+              '[HomeScreen] Ignoring self-incoming call offer from $fromId');
           return;
         }
 
-        final isGroup = offer['isGroup'] == true || offer['type']?.toString() == 'GROUP_CALL_STARTED';
+        final isGroup = offer['isGroup'] == true ||
+            offer['type']?.toString() == 'GROUP_CALL_STARTED';
         final convId = offer['conversationId']?.toString() ?? '';
         final callType = offer['callType']?.toString().toUpperCase();
 
@@ -98,14 +114,13 @@ class _HomeScreenState extends State<HomeScreen> {
               .firstOrNull;
 
           String callerName = fromId;
-          final callerMember = conv?.members
-              .where((m) => m.userId == fromId)
-              .firstOrNull;
+          final callerMember =
+              conv?.members.where((m) => m.userId == fromId).firstOrNull;
           if (callerMember != null) callerName = callerMember.username;
 
           final groupName = conv?.name ?? 'Group Call';
 
-          final offerWithDetails = Map<String, dynamic>.from(offer);
+          final offerWithDetails = _deepNormalizeMap(offer);
           offerWithDetails['isGroup'] = true;
           offerWithDetails['callerName'] = '$callerName ($groupName)';
           offerWithDetails['groupName'] = groupName;
@@ -121,17 +136,20 @@ class _HomeScreenState extends State<HomeScreen> {
           // ── Incoming 1-to-1 call — trigger unified CallKit UI ──────────────
           String callerName = fromId;
           for (final c in conversationProvider.conversations) {
-            final member = c.members
-                .where((m) => m.userId == fromId)
-                .firstOrNull;
-            if (member != null) { callerName = member.username; break; }
+            final member =
+                c.members.where((m) => m.userId == fromId).firstOrNull;
+            if (member != null) {
+              callerName = member.username;
+              break;
+            }
           }
-          final offerWithDetails = Map<String, dynamic>.from(offer);
+          final offerWithDetails = _deepNormalizeMap(offer);
           offerWithDetails['callerName'] = callerName;
           offerWithDetails['fromUserId'] = fromId;
           CallKitService.showIncomingCall(offerWithDetails);
         }
       };
+
       try {
         context.read<ChatRepository>().startListening();
       } catch (_) {
@@ -171,7 +189,8 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               SwitchListTile(
                 title: const Text('Phone Notifications'),
-                subtitle: const Text('Show alerts when someone sends a message'),
+                subtitle:
+                const Text('Show alerts when someone sends a message'),
                 value: _notificationsEnabled,
                 activeColor: Colors.pinkAccent,
                 onChanged: (value) {
@@ -193,7 +212,8 @@ class _HomeScreenState extends State<HomeScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Close', style: TextStyle(color: Colors.pinkAccent)),
+              child: const Text('Close',
+                  style: TextStyle(color: Colors.pinkAccent)),
             ),
           ],
         ),
@@ -214,8 +234,8 @@ class _HomeScreenState extends State<HomeScreen> {
               _selectedIndex == 2
                   ? Icons.person
                   : _selectedIndex == 3
-                      ? Icons.settings
-                      : Icons.favorite,
+                  ? Icons.settings
+                  : Icons.favorite,
               color: Colors.white,
               size: 26,
             ),
@@ -225,8 +245,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 _selectedIndex == 2
                     ? 'My Profile'
                     : _selectedIndex == 3
-                        ? 'Settings'
-                        : 'In Love',
+                    ? 'Settings'
+                    : 'In Love',
                 style: AppBarStyle.titleStyle,
               ),
             ),
@@ -251,20 +271,36 @@ class _HomeScreenState extends State<HomeScreen> {
               itemBuilder: (context) => [
                 const PopupMenuItem<ThemeMode>(
                   value: ThemeMode.light,
-                  child: Row(children: [Icon(Icons.light_mode, color: Colors.pinkAccent), SizedBox(width: 10), Text('Light Theme')]),
+                  child: Row(children: [
+                    Icon(Icons.light_mode, color: Colors.pinkAccent),
+                    SizedBox(width: 10),
+                    Text('Light Theme')
+                  ]),
                 ),
                 const PopupMenuItem<ThemeMode>(
                   value: ThemeMode.dark,
-                  child: Row(children: [Icon(Icons.dark_mode, color: Colors.pinkAccent), SizedBox(width: 10), Text('Dark Theme')]),
+                  child: Row(children: [
+                    Icon(Icons.dark_mode, color: Colors.pinkAccent),
+                    SizedBox(width: 10),
+                    Text('Dark Theme')
+                  ]),
                 ),
                 const PopupMenuItem<ThemeMode>(
                   value: ThemeMode.system,
-                  child: Row(children: [Icon(Icons.brightness_auto, color: Colors.pinkAccent), SizedBox(width: 10), Text('System Default')]),
+                  child: Row(children: [
+                    Icon(Icons.brightness_auto, color: Colors.pinkAccent),
+                    SizedBox(width: 10),
+                    Text('System Default')
+                  ]),
                 ),
                 const PopupMenuDivider(),
                 const PopupMenuItem<String>(
                   value: 'notification_mode',
-                  child: Row(children: [Icon(Icons.notifications, color: Colors.pinkAccent), SizedBox(width: 10), Text('Notification Mode')]),
+                  child: Row(children: [
+                    Icon(Icons.notifications, color: Colors.pinkAccent),
+                    SizedBox(width: 10),
+                    Text('Notification Mode')
+                  ]),
                 ),
               ],
             ),
@@ -274,17 +310,18 @@ class _HomeScreenState extends State<HomeScreen> {
       body: _screens[_selectedIndex],
       floatingActionButton: _selectedIndex == 0
           ? FloatingActionButton.extended(
-              backgroundColor: Colors.pinkAccent,
-              elevation: 4,
-              icon: const Icon(Icons.group_add_rounded, color: Colors.white),
-              label: const Text(
-                'New Group',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-              ),
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const CreateGroupScreen()),
-              ),
-            )
+        backgroundColor: Colors.pinkAccent,
+        elevation: 4,
+        icon: const Icon(Icons.group_add_rounded, color: Colors.white),
+        label: const Text(
+          'New Group',
+          style:
+          TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        onPressed: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const CreateGroupScreen()),
+        ),
+      )
           : null,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
@@ -310,7 +347,9 @@ class _HomeScreenState extends State<HomeScreen> {
             selectedIcon: Consumer<ConversationProvider>(
               builder: (_, convo, __) {
                 final count = convo.incomingRequests.length;
-                if (count == 0) return const Icon(Icons.message, color: Colors.pinkAccent);
+                if (count == 0) {
+                  return const Icon(Icons.message, color: Colors.pinkAccent);
+                }
                 return Badge(
                   label: Text('$count'),
                   backgroundColor: Colors.pinkAccent,

@@ -65,6 +65,20 @@ class StompService {
 
     if (_isConnected && _stompClient != null) return;
 
+    // Never keep two live clients. If a previous client is still handshaking
+    // or auto-reconnecting (initSocket is called from several screens), it
+    // holds its own /user/queue/signal subscription and every frame would be
+    // delivered twice. Deactivate it before creating a replacement.
+    if (_stompClient != null) {
+      debugPrint('STOMP replacing existing (not-yet-connected) client.');
+      try {
+        _stompClient!.deactivate();
+      } catch (_) {}
+      _stompClient = null;
+      _isConnected = false;
+      _liveSignalSubscriptions.clear();
+    }
+
     final token = authProvider.accessToken;
     if (token == null) {
       debugPrint('STOMP Connection failed: No access token available.');

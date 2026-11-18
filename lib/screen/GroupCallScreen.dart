@@ -51,6 +51,10 @@ String _initial(String name) =>
 ///
 /// [callerUserId] is non-null when this device is the **callee** joining an
 /// existing call. When null, this device is the **caller** starting a new call.
+///
+/// - Voice call  → starts with the camera OFF, but a Camera button is always
+///   available so the user can upgrade to video at any time.
+/// - Video call  → starts with the camera ON.
 class GroupCallScreen extends StatefulWidget {
   final String conversationId;
   final String groupName;
@@ -84,7 +88,15 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   late final StreamSubscription _declinedSub;
 
   bool _muted = false;
-  bool _camOff = false;
+
+  /// Current call mode. Starts as the widget's mode, but a voice call can be
+  /// upgraded to video mid-call.
+  late bool _videoMode = widget.isVideo;
+
+  /// Voice answer  → camera off.  Video answer → camera on.
+  late bool _camOff = !widget.isVideo;
+
+  bool _upgrading = false; // guards double-tap while enabling camera
   bool _joined = false; // true once at least one peer connects
   bool _msgSent = false;
   bool _leaving = false; // guards a double teardown
@@ -112,6 +124,15 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     _changeSub = _sig.onParticipantsChanged.stream.listen((_) {
       if (!mounted) return;
       setState(() {});
+      // Someone turned their camera on: follow them into video mode
+      // (our own camera stays off until we tap the camera button).
+      if (!_videoMode && _sig.participants.any((p) => p.videoOn)) {
+        setState(() {
+          _videoMode = true;
+          _showUi = true;
+        });
+        _scheduleHide();
+      }
       if (!_joined && _sig.participants.any((p) => p.connected)) {
         _joined = true;
         // Stop ringback/ringtone once first participant connects.
@@ -126,7 +147,12 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     });
 
     _localSub = _sig.onLocalStream.stream.listen((stream) {
-      if (mounted) setState(() => _localRenderer.srcObject = stream);
+      if (!mounted) return;
+      setState(() {
+        // Detach first so a camera track added mid-call is picked up.
+        _localRenderer.srcObject = null;
+        _localRenderer.srcObject = stream;
+      });
     });
 
     // Caller side: a member that taps "Decline" on the incoming-call overlay.
@@ -183,11 +209,11 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     });
   }
 
-  // ── Auto-hiding UI (video calls only) ──────────────────────────────────────
+  // ── Auto-hiding UI (video mode only) ───────────────────────────────────────
 
   void _scheduleHide() {
     _hideTimer?.cancel();
-    if (!widget.isVideo || !_joined) return;
+    if (!_videoMode || !_joined) return;
     _hideTimer = Timer(const Duration(seconds: 5), () {
       if (mounted && _sig.participants.isNotEmpty) {
         setState(() => _showUi = false);
@@ -196,7 +222,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   }
 
   void _toggleUi() {
-    if (!widget.isVideo) return;
+    if (!_videoMode) return;
     setState(() => _showUi = !_showUi);
     if (_showUi) _scheduleHide();
   }
@@ -206,6 +232,60 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     HapticFeedback.lightImpact();
     _scheduleHide();
   }
+
+  // ── Camera ─────────────────────────────────────────────────────────────────
+
+  /// Camera button.
+  /// - Voice call: first tap upgrades the call to video (camera turns on).
+  /// - Video call: toggles the camera on/off.
+  Future<void> _onCamToggle() async {
+    _touchUi();
+    if (_upgrading) return;
+
+    // No camera captured yet (voice call, or we were pulled into video mode
+    // by the other side): capture it and renegotiate.
+    if (_camOff && !_sig.hasLocalVideo) {
+      _upgrading = true;
+      try {
+        await _sig.enableVideo();
+        if (!mounted) return;
+        setState(() {
+          _videoMode = true;
+          _camOff = false;
+          _showUi = true;
+        });
+        _scheduleHide();
+      } catch (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(
+              SnackBar(
+                behavior: SnackBarBehavior.floating,
+                backgroundColor: _C.surface,
+                margin: const EdgeInsets.fromLTRB(16, 0, 16, 150),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+                content: const Text(
+                  'Cannot access camera',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            );
+        }
+      } finally {
+        _upgrading = false;
+      }
+      return;
+    }
+
+    // Already video: normal on/off
+    setState(() => _camOff = !_camOff);
+    _sig.toggleCamera(_camOff);
+  }
+
+  /// A remote tile only shows video when that person really has a video track.
+  bool _hasVideo(GroupParticipant p) => p.connected && p.videoOn;
 
   // ── Leaving ────────────────────────────────────────────────────────────────
 
@@ -250,7 +330,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
       _msgSent = true;
       try {
         final auth = context.read<AuthProvider>();
-        final kind = widget.isVideo ? 'VIDEO' : 'AUDIO';
+        final kind = _videoMode ? 'VIDEO' : 'AUDIO';
         final outcome = _joined ? _elapsedLabel : 'MISSED';
         await convos.sendMessage(auth, widget.conversationId, '$kind:$outcome',
             type: app_msg.MessageType.CALL);
@@ -295,7 +375,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     final pad = MediaQuery.of(context).padding;
     final topInset = pad.top + 84;
     final bottomInset = pad.bottom + 150;
-    final uiVisible = _showUi || !widget.isVideo;
+    final uiVisible = _showUi || !_videoMode;
 
     return PopScope(
       // Back gesture asks for confirmation instead of silently dropping the call.
@@ -310,7 +390,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
           children: [
             const _Backdrop(),
 
-            // Stage (tap toggles the UI in video calls).
+            // Stage (tap toggles the UI in video mode).
             Positioned.fill(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
@@ -350,17 +430,13 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
                   child: _GroupControlBar(
                     muted: _muted,
                     camOff: _camOff,
-                    isVideo: widget.isVideo,
+                    isVideo: _videoMode,
                     onMute: () {
                       _touchUi();
                       setState(() => _muted = !_muted);
                       _sig.toggleMute(_muted);
                     },
-                    onCamToggle: () {
-                      _touchUi();
-                      setState(() => _camOff = !_camOff);
-                      _sig.toggleCamera(_camOff);
-                    },
+                    onCamToggle: _onCamToggle,
                     onSwitchCam: () {
                       _touchUi();
                       _sig.switchCamera();
@@ -384,8 +460,8 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
       double topInset,
       double bottomInset,
       ) {
-    // Audio call: avatars only.
-    if (!widget.isVideo) {
+    // Voice mode: avatars only.
+    if (!_videoMode) {
       return Padding(
         padding: EdgeInsets.only(top: topInset, bottom: bottomInset),
         child: _AudioStage(localMuted: _muted, participants: remotes),
@@ -417,7 +493,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
           renderer: p.renderer,
           name: p.username,
           isLocal: false,
-          showVideo: p.connected,
+          showVideo: _hasVideo(p),
           connected: p.connected,
           compact: compact,
           radius: compact ? 16 : 0,
@@ -438,7 +514,7 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
               renderer: p.renderer,
               name: p.username,
               isLocal: false,
-              showVideo: p.connected,
+              showVideo: _hasVideo(p),
               connected: p.connected,
               radius: 18,
             ),
@@ -714,8 +790,10 @@ class _PipStageState extends State<_PipStage> {
 
   @override
   Widget build(BuildContext context) {
-    final main = _swapped ? widget.local(compact: false) : widget.remote(compact: false);
-    final pip = _swapped ? widget.remote(compact: true) : widget.local(compact: true);
+    final main =
+    _swapped ? widget.local(compact: false) : widget.remote(compact: false);
+    final pip =
+    _swapped ? widget.remote(compact: true) : widget.local(compact: true);
 
     return LayoutBuilder(
       builder: (context, c) {
@@ -1153,7 +1231,7 @@ class _AudioCard extends StatelessWidget {
 class _GroupControlBar extends StatelessWidget {
   final bool muted;
   final bool camOff;
-  final bool isVideo;
+  final bool isVideo; // current mode (true once video is active)
   final VoidCallback onMute;
   final VoidCallback onCamToggle;
   final VoidCallback onSwitchCam;
@@ -1178,20 +1256,27 @@ class _GroupControlBar extends StatelessWidget {
         active: muted,
         onTap: onMute,
       ),
-      if (isVideo) ...[
-        _ControlButton(
-          icon: camOff ? Icons.videocam_off_rounded : Icons.videocam_rounded,
-          label: camOff ? 'Start cam' : 'Stop cam',
-          active: camOff,
-          onTap: onCamToggle,
-        ),
+
+      // Camera button is ALWAYS visible.
+      // Voice call: tap = switch to video. Video call: tap = camera on/off.
+      _ControlButton(
+        icon: (isVideo && !camOff)
+            ? Icons.videocam_rounded
+            : Icons.videocam_off_rounded,
+        label: !isVideo ? 'Camera' : (camOff ? 'Start cam' : 'Stop cam'),
+        active: isVideo && camOff,
+        onTap: onCamToggle,
+      ),
+
+      // Flip only makes sense while the camera is running.
+      if (isVideo)
         _ControlButton(
           icon: Icons.flip_camera_ios_rounded,
           label: 'Flip',
           enabled: !camOff,
           onTap: onSwitchCam,
         ),
-      ],
+
       _ControlButton(
         icon: Icons.call_end_rounded,
         label: 'Leave',

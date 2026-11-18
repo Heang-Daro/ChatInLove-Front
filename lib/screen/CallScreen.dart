@@ -11,6 +11,7 @@ import 'package:love_in_chat/model/emun/MessageType.dart' as app_msg;
 import 'package:love_in_chat/provider/AuthProvider.dart';
 import 'package:love_in_chat/provider/ConversationProvider.dart';
 import 'package:love_in_chat/service/CallKitService.dart';
+import 'package:love_in_chat/service/CallOverlayController.dart';
 import 'package:love_in_chat/service/CallRingtoneService.dart';
 import 'package:love_in_chat/service/CallSignalingService.dart';
 import 'HomeScreen.dart';
@@ -20,7 +21,6 @@ import 'HomeScreen.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _C {
-  /// Brand colour: pinkAccent 400.
   static final Color brand = Colors.pinkAccent.shade400;
   static const Color bg = Color(0xFF0D090C);
   static const Color surface = Color(0xFF241820);
@@ -31,11 +31,6 @@ class _C {
 String _initial(String name) =>
     name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : '?';
 
-/// Full-screen in-call screen.
-///
-/// Handles both outgoing and incoming calls:
-/// • Outgoing — pass [remoteUserId], [conversationId], [isVideo], [signalingService]
-/// • Incoming — also pass [incomingOffer] (the offer map from the signal queue)
 class CallScreen extends StatefulWidget {
   final String remoteUserId;
   final String remoteName;
@@ -59,32 +54,37 @@ class CallScreen extends StatefulWidget {
 }
 
 class _CallScreenState extends State<CallScreen> {
-  /// How long the caller waits for an answer before giving up.
   static const _ringTimeout = Duration(seconds: 45);
 
   final _localRenderer = RTCVideoRenderer();
   final _remoteRenderer = RTCVideoRenderer();
 
-  // Nullable: they are assigned after async work, and dispose() may run first.
   StreamSubscription? _remoteSub;
   StreamSubscription? _localSub;
   StreamSubscription? _endedSub;
 
-  // Captured up-front so we can still send the call message even if the
-  // widget is already leaving the tree (context.read after await is unsafe).
-  late final AuthProvider _auth;
-  late final ConversationProvider _convos;
+  AuthProvider? _auth;
+  ConversationProvider? _convos;
 
   bool _muted = false;
-  bool _cameraOff = false;
+  late bool _cameraOff;
   bool _speakerOn = true;
   bool _connected = false;
   bool _ringing = true;
-  bool _messageSent = false; // guard against double-sending
-  bool _leaving = false; // guard against double pop
-  bool _showUi = true; // header + controls (auto-hide in connected video)
+  bool _messageSent = false;
+  bool _leaving = false;
+  bool _showUi = true;
+  bool _minimized = false;
 
   bool get _isCaller => widget.incomingOffer == null;
+
+  bool get _hasActiveVideo {
+    if (!_connected) return false;
+    final remoteTracks = _remoteRenderer.srcObject?.getVideoTracks() ?? [];
+    final remoteVideoActive =
+        remoteTracks.isNotEmpty && remoteTracks.any((t) => t.enabled);
+    return !_cameraOff || remoteVideoActive;
+  }
 
   Duration _elapsed = Duration.zero;
   Timer? _timer;
@@ -93,14 +93,11 @@ class _CallScreenState extends State<CallScreen> {
 
   // ── Call summary message ─────────────────────────────────────────────────
 
-  /// Encodes the call outcome as the message content stored in the DB.
-  /// Format: "AUDIO:mm:ss" | "VIDEO:mm:ss" | "AUDIO:MISSED" etc.
   String _callContent(String outcome) {
     final kind = widget.isVideo ? 'VIDEO' : 'AUDIO';
     return '$kind:$outcome';
   }
 
-  /// mm:ss (minutes may exceed 59 so the stored format stays parseable).
   String get _durationLabel {
     final m = _elapsed.inMinutes.toString().padLeft(2, '0');
     final s = _elapsed.inSeconds.remainder(60).toString().padLeft(2, '0');
@@ -113,16 +110,13 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> _sendCallMessage(String outcome) async {
-    if (_messageSent) return;
-    // CRITICAL: Only the caller logs the call summary message.
-    // If the callee logs it, the server attributes the message to the callee,
-    // making it appear as if the callee called the caller!
-    if (!_isCaller) return;
+    if (_messageSent || !_isCaller) return;
+    if (_auth == null || _convos == null) return;
 
     _messageSent = true;
     try {
-      await _convos.sendMessage(
-        _auth,
+      await _convos!.sendMessage(
+        _auth!,
         widget.conversationId,
         _callContent(outcome),
         type: app_msg.MessageType.CALL,
@@ -132,19 +126,55 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
+  // ── Minimize / Expand ────────────────────────────────────────────────────
+
+  void _minimizeCall() {
+    if (_minimized || _leaving) return;
+    HapticFeedback.lightImpact();
+    CallOverlayController.isMinimized = true;
+    setState(() => _minimized = true);
+  }
+
+  void _expandCall() {
+    if (!_minimized) return;
+    HapticFeedback.selectionClick();
+    CallOverlayController.isMinimized = false;
+    setState(() {
+      _minimized = false;
+      _showUi = true;
+    });
+    _scheduleHide();
+  }
+
   // ── Lifecycle ────────────────────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
-    _auth = context.read<AuthProvider>();
-    _convos = context.read<ConversationProvider>();
+    _cameraOff = !widget.isVideo;
+    try {
+      _auth = context.read<AuthProvider>();
+      _convos = context.read<ConversationProvider>();
+    } catch (e) {
+      debugPrint('[CallScreen] Provider lookup skipped in overlay: $e');
+    }
     _initCall();
   }
 
+  Future<void> _onRemoteStreamReady(MediaStream stream) async {
+    _ringTimer?.cancel();
+    await CallRingtoneService.stop();
+    if (!mounted) return;
+    setState(() {
+      _remoteRenderer.srcObject = stream;
+      _connected = true;
+      _ringing = false;
+    });
+    _startTimer();
+    _scheduleHide();
+  }
+
   Future<void> _initCall() async {
-    // Ringtone belongs to the incoming UI; make sure it's off now that the
-    // call screen is open. (CallKit UI is already dismissed by CallKitService.)
     unawaited(CallRingtoneService.stop());
 
     await _localRenderer.initialize();
@@ -153,20 +183,8 @@ class _CallScreenState extends State<CallScreen> {
 
     final sig = widget.signalingService;
 
-    // Subscribe BEFORE starting/answering so no early event is missed.
-    _remoteSub = sig.onRemoteStream.stream.listen((stream) async {
-      // Remote stream arrived => call answered. Stop ringback.
-      _ringTimer?.cancel();
-      await CallRingtoneService.stop();
-      if (!mounted) return;
-      setState(() {
-        _remoteRenderer.srcObject = stream;
-        _connected = true;
-        _ringing = false;
-      });
-      _startTimer();
-      _scheduleHide();
-    });
+    // ភ្ជាប់ Stream Listeners
+    _remoteSub = sig.onRemoteStream.stream.listen(_onRemoteStreamReady);
 
     _localSub = sig.onLocalStream.stream.listen((stream) {
       if (!mounted) return;
@@ -174,12 +192,10 @@ class _CallScreenState extends State<CallScreen> {
     });
 
     _endedSub = sig.onCallEnded.stream.listen((type) async {
-      // Remote side ended the call.
       _ringTimer?.cancel();
       if (_connected) {
         await _sendCallMessage(_durationLabel);
       } else {
-        // We were ringing when the remote cancelled or declined.
         await _sendCallMessage(
           type == SignalType.callReject ? 'REJECTED' : 'MISSED',
         );
@@ -187,7 +203,14 @@ class _CallScreenState extends State<CallScreen> {
       _leave();
     });
 
-    // Loudspeaker by default (voice AND video, matching the UI state).
+    // ពិនិត្យមើលថាតើ Stream មានរួចហើយឬនៅ (ការពារ Race Condition)
+    if (sig.latestLocalStream != null) {
+      _localRenderer.srcObject = sig.latestLocalStream;
+    }
+    if (sig.latestRemoteStream != null) {
+      await _onRemoteStreamReady(sig.latestRemoteStream!);
+    }
+
     try {
       await Helper.setSpeakerphoneOn(true);
     } catch (e) {
@@ -197,7 +220,6 @@ class _CallScreenState extends State<CallScreen> {
 
     try {
       if (_isCaller) {
-        // Ringback while waiting for the callee to answer.
         await CallRingtoneService.playRingback();
         _ringTimer = Timer(_ringTimeout, _onRingTimeout);
 
@@ -207,11 +229,18 @@ class _CallScreenState extends State<CallScreen> {
           video: widget.isVideo,
         );
       } else {
+        // រង់ចាំ STOMP ភ្ជាប់រួចរាល់ (អតិបរមា 3 វិនាទី) ករណី Activity ទើប Resume
+        for (int i = 0; i < 30; i++) {
+          if (sig.stomp.isConnected) break;
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
+
         await sig.answerCall(
-            offerMsg: widget.incomingOffer!, video: widget.isVideo);
+          offerMsg: widget.incomingOffer!,
+          video: widget.isVideo,
+        );
       }
     } catch (e) {
-      // Typically: camera/mic permission denied or signaling failure.
       debugPrint('[CallScreen] call setup failed: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -246,25 +275,29 @@ class _CallScreenState extends State<CallScreen> {
     });
   }
 
-  /// Caller waited too long with no answer.
   Future<void> _onRingTimeout() async {
     if (_connected || _leaving) return;
     await _hangup(outcomeOverride: 'MISSED');
   }
 
   Future<void> _leave() async {
-    if (_leaving) return; // hangup() + onCallEnded can both land here
+    if (_leaving) return;
     _leaving = true;
 
     _timer?.cancel();
     _ringTimer?.cancel();
     _hideTimer?.cancel();
-    if (!mounted) return;
 
     try {
-      _convos.markCallEnded();
+      _convos?.markCallEnded();
     } catch (_) {}
 
+    if (CallOverlayController.isShowing) {
+      CallOverlayController.closeCall();
+      return;
+    }
+
+    if (!mounted) return;
     final nav = Navigator.of(context);
     if (nav.canPop()) {
       nav.pop();
@@ -284,7 +317,6 @@ class _CallScreenState extends State<CallScreen> {
     if (_leaving) return;
     _ringTimer?.cancel();
 
-    // Determine outcome before tearing down.
     final outcome =
         outcomeOverride ?? (_connected ? _durationLabel : 'CANCELLED');
     try {
@@ -296,52 +328,28 @@ class _CallScreenState extends State<CallScreen> {
     _leave();
   }
 
-  /// System back: while ringing it cancels right away; during a live call it
-  /// asks first so a stray swipe cannot end the conversation.
   Future<void> _onBack() async {
-    if (!_connected) {
-      _hangup();
+    if (_connected) {
+      _minimizeCall();
       return;
     }
-    final end = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: _C.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('End call?',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-        content: Text(
-          'Your call with ${widget.remoteName} will end.',
-          style: const TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: Text('Stay', style: TextStyle(color: _C.brand)),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _C.danger),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('End call'),
-          ),
-        ],
-      ),
-    );
-    if (end == true && mounted) _hangup();
+    _hangup();
   }
 
-  // ── Auto-hiding UI (connected video calls only) ───────────────────────────
+  // ── Auto-hiding UI ───────────────────────────────────────────────────────
 
   void _scheduleHide() {
     _hideTimer?.cancel();
-    if (!widget.isVideo || !_connected) return;
+    if (!_hasActiveVideo) return;
     _hideTimer = Timer(const Duration(seconds: 5), () {
-      if (mounted) setState(() => _showUi = false);
+      if (mounted && _hasActiveVideo) {
+        setState(() => _showUi = false);
+      }
     });
   }
 
   void _toggleUi() {
-    if (!widget.isVideo || !_connected) return;
+    if (!_hasActiveVideo) return;
     setState(() => _showUi = !_showUi);
     if (_showUi) _scheduleHide();
   }
@@ -359,10 +367,30 @@ class _CallScreenState extends State<CallScreen> {
     widget.signalingService.toggleMute(_muted);
   }
 
-  void _toggleCamera() {
+  Future<void> _toggleCamera() async {
     _touchUi();
-    setState(() => _cameraOff = !_cameraOff);
-    widget.signalingService.toggleCamera(_cameraOff);
+    final nextCameraOff = !_cameraOff;
+
+    final hasVideoTrack =
+    (_localRenderer.srcObject?.getVideoTracks().isNotEmpty ?? false);
+
+    if (!nextCameraOff && !hasVideoTrack) {
+      try {
+        await widget.signalingService.enableVideo();
+      } catch (e) {
+        debugPrint('[CallScreen] enableVideo error: $e');
+        return;
+      }
+    } else {
+      widget.signalingService.toggleCamera(nextCameraOff);
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _cameraOff = nextCameraOff;
+      if (nextCameraOff) _showUi = true;
+    });
+    if (!nextCameraOff) _scheduleHide();
   }
 
   Future<void> _toggleSpeaker() async {
@@ -399,8 +427,25 @@ class _CallScreenState extends State<CallScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final liveVideo = _hasActiveVideo;
+
+    if (_minimized) {
+      return _FloatingCallBubble(
+        remoteName: widget.remoteName,
+        isVideo: liveVideo,
+        connected: _connected,
+        statusLabel: _statusLabel,
+        remoteRenderer: _remoteRenderer,
+        hasRemoteVideo: liveVideo && _remoteRenderer.srcObject != null,
+        onExpand: _expandCall,
+        onHangup: () {
+          HapticFeedback.mediumImpact();
+          _hangup();
+        },
+      );
+    }
+
     final pad = MediaQuery.of(context).padding;
-    final liveVideo = widget.isVideo && _connected;
     final uiVisible = _showUi || !liveVideo;
 
     return PopScope(
@@ -415,7 +460,7 @@ class _CallScreenState extends State<CallScreen> {
           children: [
             const _Backdrop(),
 
-            // Stage (tap toggles the UI in a live video call).
+            // Stage
             Positioned.fill(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
@@ -424,7 +469,7 @@ class _CallScreenState extends State<CallScreen> {
               ),
             ),
 
-            // Bottom scrim so the controls stay readable over video.
+            // Bottom scrim
             if (liveVideo)
               Positioned(
                 left: 0,
@@ -451,7 +496,7 @@ class _CallScreenState extends State<CallScreen> {
                 ),
               ),
 
-            // Header (name + timer) for a live video call.
+            // Header (Live Video Call)
             if (liveVideo)
               Positioned(
                 top: 0,
@@ -464,6 +509,25 @@ class _CallScreenState extends State<CallScreen> {
                     name: widget.remoteName,
                     status: _statusLabel,
                     muted: _muted,
+                    onMinimize: _minimizeCall,
+                  ),
+                ),
+              ),
+
+            // ប៊ូតុង Minimize សម្រាប់ Voice Call ឬពេលកំពុង Ringing
+            if (!liveVideo)
+              Positioned(
+                top: pad.top + 10,
+                left: 16,
+                child: IconButton(
+                  onPressed: _minimizeCall,
+                  style: IconButton.styleFrom(
+                    backgroundColor: Colors.white.withValues(alpha: 0.14),
+                  ),
+                  icon: const Icon(
+                    Icons.picture_in_picture_alt_rounded,
+                    color: Colors.white,
+                    size: 20,
                   ),
                 ),
               ),
@@ -481,7 +545,6 @@ class _CallScreenState extends State<CallScreen> {
                     muted: _muted,
                     cameraOff: _cameraOff,
                     speakerOn: _speakerOn,
-                    isVideo: widget.isVideo,
                     onMute: _toggleMute,
                     onSpeaker: _toggleSpeaker,
                     onCameraToggle: _toggleCamera,
@@ -501,8 +564,7 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Widget _buildStage(double topInset, double bottomInset) {
-    // Live video: remote full-bleed + draggable self-view.
-    if (widget.isVideo && _connected) {
+    if (_hasActiveVideo) {
       return _PipStage(
         topInset: topInset,
         bottomInset: bottomInset,
@@ -520,16 +582,12 @@ class _CallScreenState extends State<CallScreen> {
       );
     }
 
-    // Ringing / connecting / audio call.
-    final showPreview = widget.isVideo &&
-        !_cameraOff &&
-        _localRenderer.srcObject != null;
+    final showPreview = !_cameraOff && _localRenderer.srcObject != null;
 
     return Stack(
       fit: StackFit.expand,
       children: [
         if (showPreview) ...[
-          // Your own camera behind the "calling" UI, dimmed.
           RTCVideoView(
             _localRenderer,
             mirror: true,
@@ -555,6 +613,226 @@ class _CallScreenState extends State<CallScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Floating Call Bubble (Minimized State)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _FloatingCallBubble extends StatefulWidget {
+  final String remoteName;
+  final bool isVideo;
+  final bool connected;
+  final String statusLabel;
+  final RTCVideoRenderer remoteRenderer;
+  final bool hasRemoteVideo;
+  final VoidCallback onExpand;
+  final VoidCallback onHangup;
+
+  const _FloatingCallBubble({
+    required this.remoteName,
+    required this.isVideo,
+    required this.connected,
+    required this.statusLabel,
+    required this.remoteRenderer,
+    required this.hasRemoteVideo,
+    required this.onExpand,
+    required this.onHangup,
+  });
+
+  @override
+  State<_FloatingCallBubble> createState() => _FloatingCallBubbleState();
+}
+
+class _FloatingCallBubbleState extends State<_FloatingCallBubble> {
+  double _left = 16;
+  double _top = 90;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    final w = widget.isVideo ? 124.0 : 168.0;
+    final h = widget.isVideo ? 176.0 : 68.0;
+    final initial = _initial(widget.remoteName);
+
+    return Stack(
+      children: [
+        Positioned(
+          left: _left.clamp(12.0, size.width - w - 12.0),
+          top: _top.clamp(40.0, size.height - h - 40.0),
+          child: Material(
+            color: Colors.transparent,
+            child: GestureDetector(
+              onTap: widget.onExpand,
+              onPanUpdate: (d) {
+                setState(() {
+                  _left += d.delta.dx;
+                  _top += d.delta.dy;
+                });
+              },
+              onPanEnd: (_) {
+                setState(() {
+                  _left = (_left + w / 2 > size.width / 2)
+                      ? size.width - w - 12.0
+                      : 12.0;
+                });
+              },
+              child: Container(
+                width: w,
+                height: h,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E131A),
+                  borderRadius: BorderRadius.circular(widget.isVideo ? 18 : 34),
+                  border: Border.all(color: _C.brand, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.55),
+                      blurRadius: 16,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(widget.isVideo ? 16 : 32),
+                  child: widget.isVideo
+                      ? Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (widget.hasRemoteVideo)
+                        RTCVideoView(
+                          widget.remoteRenderer,
+                          objectFit: RTCVideoViewObjectFit
+                              .RTCVideoViewObjectFitCover,
+                        )
+                      else
+                        Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            CircleAvatar(
+                              radius: 26,
+                              backgroundColor: _C.brand,
+                              child: Text(
+                                initial,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8),
+                              child: Text(
+                                widget.statusLabel,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 24),
+                          ],
+                        ),
+                      Positioned(
+                        bottom: 6,
+                        left: 0,
+                        right: 0,
+                        child: Row(
+                          mainAxisAlignment:
+                          MainAxisAlignment.spaceEvenly,
+                          children: [
+                            _miniBtn(
+                              icon: Icons.open_in_full_rounded,
+                              color: Colors.black54,
+                              onTap: widget.onExpand,
+                            ),
+                            _miniBtn(
+                              icon: Icons.call_end_rounded,
+                              color: _C.danger,
+                              onTap: widget.onHangup,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  )
+                      : Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 20,
+                          backgroundColor: _C.brand,
+                          child: Text(
+                            initial,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                widget.remoteName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                widget.statusLabel,
+                                style: TextStyle(
+                                  color: widget.connected
+                                      ? _C.online
+                                      : Colors.white70,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _miniBtn({
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 30,
+        height: 30,
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        child: Icon(icon, color: Colors.white, size: 15),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Backdrop / animation helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -575,7 +853,6 @@ class _Backdrop extends StatelessWidget {
   }
 }
 
-/// Fades + slides its child in and out, and blocks touches while hidden.
 class _AutoHide extends StatelessWidget {
   final bool visible;
   final Offset hiddenOffset;
@@ -731,7 +1008,6 @@ class _CallerInfo extends StatelessWidget {
   }
 }
 
-/// Avatar with expanding rings while waiting, a solid pink ring once connected.
 class _RippleAvatar extends StatefulWidget {
   final String name;
   final bool rippling;
@@ -792,7 +1068,6 @@ class _RippleAvatarState extends State<_RippleAvatar>
             children: [
               if (widget.rippling)
                 for (var i = 0; i < 3; i++) _ring((_c.value + i / 3) % 1.0),
-              // Solid ring + avatar
               Container(
                 width: size + 14,
                 height: size + 14,
@@ -849,11 +1124,13 @@ class _VideoHeader extends StatelessWidget {
   final String name;
   final String status;
   final bool muted;
+  final VoidCallback onMinimize;
 
   const _VideoHeader({
     required this.name,
     required this.status,
     required this.muted,
+    required this.onMinimize,
   });
 
   @override
@@ -861,7 +1138,7 @@ class _VideoHeader extends StatelessWidget {
     final top = MediaQuery.of(context).padding.top;
 
     return Container(
-      padding: EdgeInsets.fromLTRB(20, top + 10, 20, 32),
+      padding: EdgeInsets.fromLTRB(16, top + 10, 20, 32),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
@@ -874,6 +1151,18 @@ class _VideoHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
+          IconButton(
+            onPressed: onMinimize,
+            style: IconButton.styleFrom(
+              backgroundColor: Colors.white.withValues(alpha: 0.14),
+            ),
+            icon: const Icon(
+              Icons.picture_in_picture_alt_rounded,
+              color: Colors.white,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -935,8 +1224,6 @@ class _CameraOffPlaceholder extends StatelessWidget {
   }
 }
 
-/// Remote full-bleed, small draggable self-view that snaps to the corners.
-/// Tap the small view to swap the two.
 class _PipStage extends StatefulWidget {
   final double topInset;
   final double bottomInset;
@@ -1048,7 +1335,6 @@ class _ControlBar extends StatelessWidget {
   final bool muted;
   final bool cameraOff;
   final bool speakerOn;
-  final bool isVideo;
   final VoidCallback onMute;
   final VoidCallback onSpeaker;
   final VoidCallback onCameraToggle;
@@ -1059,7 +1345,6 @@ class _ControlBar extends StatelessWidget {
     required this.muted,
     required this.cameraOff,
     required this.speakerOn,
-    required this.isVideo,
     required this.onMute,
     required this.onSpeaker,
     required this.onCameraToggle,
@@ -1076,30 +1361,24 @@ class _ControlBar extends StatelessWidget {
         active: muted,
         onTap: onMute,
       ),
-      // Speaker toggle — only on voice calls (video always uses speaker)
-      if (!isVideo)
-        _ControlButton(
-          icon: speakerOn ? Icons.volume_up_rounded : Icons.hearing_rounded,
-          label: speakerOn ? 'Speaker' : 'Earpiece',
-          active: speakerOn,
-          onTap: onSpeaker,
-        ),
-      if (isVideo) ...[
-        _ControlButton(
-          icon: cameraOff
-              ? Icons.videocam_off_rounded
-              : Icons.videocam_rounded,
-          label: cameraOff ? 'Start cam' : 'Stop cam',
-          active: cameraOff,
-          onTap: onCameraToggle,
-        ),
+      _ControlButton(
+        icon: speakerOn ? Icons.volume_up_rounded : Icons.hearing_rounded,
+        label: speakerOn ? 'Speaker' : 'Earpiece',
+        active: speakerOn,
+        onTap: onSpeaker,
+      ),
+      _ControlButton(
+        icon: cameraOff ? Icons.videocam_off_rounded : Icons.videocam_rounded,
+        label: cameraOff ? 'Start cam' : 'Stop cam',
+        active: cameraOff,
+        onTap: onCameraToggle,
+      ),
+      if (!cameraOff)
         _ControlButton(
           icon: Icons.flip_camera_ios_rounded,
           label: 'Flip',
-          enabled: !cameraOff,
           onTap: onSwitchCamera,
         ),
-      ],
       _ControlButton(
         icon: Icons.call_end_rounded,
         label: 'End',
@@ -1114,7 +1393,7 @@ class _ControlBar extends StatelessWidget {
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
           decoration: BoxDecoration(
             color: Colors.black.withValues(alpha: 0.42),
             borderRadius: BorderRadius.circular(40),
@@ -1125,7 +1404,7 @@ class _ControlBar extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               for (var i = 0; i < buttons.length; i++) ...[
-                if (i > 0) const SizedBox(width: 18),
+                if (i > 0) const SizedBox(width: 12),
                 buttons[i],
               ],
             ],
@@ -1140,7 +1419,7 @@ class _ControlButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
-  final bool active; // toggled on (muted, speaker on, camera off…)
+  final bool active;
   final bool enabled;
   final bool danger;
   final double size;
@@ -1175,7 +1454,7 @@ class _ControlButton extends StatelessWidget {
           behavior: HitTestBehavior.opaque,
           onTap: enabled ? onTap : null,
           child: SizedBox(
-            width: 64,
+            width: 58,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [

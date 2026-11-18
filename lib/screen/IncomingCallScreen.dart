@@ -4,40 +4,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:love_in_chat/service/CallKitService.dart';
+import 'package:love_in_chat/service/CallOverlayController.dart';
 import 'package:love_in_chat/service/CallRingtoneService.dart';
 import 'package:love_in_chat/service/CallSignalingService.dart';
-import 'CallScreen.dart';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Design tokens
-// ─────────────────────────────────────────────────────────────────────────────
 
 class _C {
-  /// Brand colour: pinkAccent 400.
   static final Color brand = Colors.pinkAccent.shade400;
   static const Color bg = Color(0xFF0D090C);
   static const Color danger = Color(0xFFE53935);
 }
 
-/// Ringing / incoming-call overlay shown to the callee (foreground fallback).
-///
-/// Pass [cancelStream] so the screen closes automatically if the caller hangs
-/// up before the callee answers. Wire it from wherever you handle the
-/// "call cancelled / hangup" signal, e.g. a StreamController you feed from
-/// your STOMP listener:
-///
-///   IncomingCallScreen(
-///     offer: offer,
-///     callerName: name,
-///     signalingService: signaling,
-///     cancelStream: cancelController.stream,
-///   )
 class IncomingCallScreen extends StatefulWidget {
   final Map<String, dynamic> offer;
   final String callerName;
   final CallSignalingService signalingService;
-
-  /// Emits an event when the caller cancels. Optional.
   final Stream<void>? cancelStream;
 
   const IncomingCallScreen({
@@ -63,6 +43,16 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
       widget.offer['callSessionId']?.toString() ??
           widget.offer['callId']?.toString() ??
           '';
+
+  Map<String, dynamic> _deepNormalizeMap(dynamic raw) {
+    if (raw is Map) {
+      return raw.map((k, v) => MapEntry(
+        k.toString(),
+        v is Map ? _deepNormalizeMap(v) : v,
+      ));
+    }
+    return <String, dynamic>{};
+  }
 
   @override
   void initState() {
@@ -90,14 +80,12 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     HapticFeedback.mediumImpact();
     CallRingtoneService.stop();
 
-    // Capture before popping; don't touch widget/context afterwards.
-    final offer = widget.offer;
+    final offer = _deepNormalizeMap(widget.offer);
     final signaling = widget.signalingService;
     final sessionId = _sessionId;
 
     if (mounted) Navigator.of(context).pop();
 
-    // Same endpoint CallKit uses; fall back to signaling only if REST fails.
     unawaited(() async {
       final ok = await CallKitService.postCallAction('reject', sessionId);
       if (!ok) signaling.rejectCall(offer);
@@ -110,21 +98,22 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     HapticFeedback.mediumImpact();
     CallRingtoneService.stop();
 
-    // Tell the server immediately so the caller stops ringing,
-    // without blocking navigation on the network.
+    final normalizedOffer = _deepNormalizeMap(widget.offer);
     unawaited(CallKitService.postCallAction('accept', _sessionId));
 
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => CallScreen(
-          remoteUserId: widget.offer['fromUserId']?.toString() ?? '',
-          remoteName: widget.callerName,
-          conversationId: widget.offer['conversationId']?.toString() ?? '',
-          isVideo: _isVideo,
-          incomingOffer: widget.offer,
-          signalingService: widget.signalingService,
-        ),
-      ),
+    // បិទ IncomingCallScreen ជាមុនសិន ដើម្បីត្រឡប់ទៅ HomeScreen / ChatScreen
+    final rootCtx = navigatorKey.currentContext ?? context;
+    if (mounted) Navigator.of(context).pop();
+
+    // បើក CallScreen ជា Overlay លើ App (ពេល Minimize នឹងឃើញ Screen ខាងក្រោមច្បាស់ 100%)
+    CallOverlayController.showCall(
+      context: rootCtx,
+      remoteUserId: normalizedOffer['fromUserId']?.toString() ?? '',
+      remoteName: widget.callerName,
+      conversationId: normalizedOffer['conversationId']?.toString() ?? '',
+      isVideo: _isVideo,
+      incomingOffer: normalizedOffer,
+      signalingService: widget.signalingService,
     );
   }
 
@@ -132,7 +121,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
   Widget build(BuildContext context) {
     final name = widget.callerName;
 
-    // System back = decline, so the caller isn't left ringing.
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -143,7 +131,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
         body: Stack(
           fit: StackFit.expand,
           children: [
-            // Soft pink glow behind the caller.
             DecoratedBox(
               decoration: BoxDecoration(
                 gradient: RadialGradient(
@@ -157,11 +144,9 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
               child: Column(
                 children: [
                   const SizedBox(height: 28),
-
-                  // Call type pill
                   Container(
-                    padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 8),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(20),
@@ -169,11 +154,17 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(_isVideo ? Icons.videocam_rounded : Icons.call_rounded,
-                            color: Colors.white, size: 16),
+                        Icon(
+                            _isVideo
+                                ? Icons.videocam_rounded
+                                : Icons.call_rounded,
+                            color: Colors.white,
+                            size: 16),
                         const SizedBox(width: 8),
                         Text(
-                          _isVideo ? 'Incoming video call' : 'Incoming voice call',
+                          _isVideo
+                              ? 'Incoming video call'
+                              : 'Incoming voice call',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 13,
@@ -183,8 +174,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
                       ],
                     ),
                   ),
-
-                  // Caller
                   Expanded(
                     child: Center(
                       child: Column(
@@ -217,8 +206,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
                       ),
                     ),
                   ),
-
-                  // Actions
                   Padding(
                     padding: const EdgeInsets.fromLTRB(40, 0, 40, 48),
                     child: Row(
@@ -252,10 +239,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     );
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Avatar with ripple rings
-// ─────────────────────────────────────────────────────────────────────────────
 
 class _RippleAvatar extends StatefulWidget {
   final String name;
@@ -341,16 +324,12 @@ class _RippleAvatarState extends State<_RippleAvatar>
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Action button
-// ─────────────────────────────────────────────────────────────────────────────
-
 class _CallButton extends StatefulWidget {
   final IconData icon;
   final String label;
   final Color color;
   final VoidCallback onTap;
-  final bool pulse; // gentle attention pulse (used for Accept)
+  final bool pulse;
 
   const _CallButton({
     required this.icon,

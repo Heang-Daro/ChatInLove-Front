@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'dart:async' as async;
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -23,36 +23,48 @@ enum SignalType {
 extension SignalTypeExt on SignalType {
   String get wire {
     switch (this) {
-      case SignalType.callOffer:     return 'CALL_OFFER';
-      case SignalType.callAnswer:    return 'CALL_ANSWER';
-      case SignalType.iceCandidate:  return 'ICE_CANDIDATE';
-      case SignalType.callReject:    return 'CALL_REJECT';
-      case SignalType.callCancel:    return 'CALL_CANCEL';
-      case SignalType.callHangup:    return 'CALL_HANGUP';
-      case SignalType.callBusy:      return 'CALL_BUSY';
+      case SignalType.callOffer:
+        return 'CALL_OFFER';
+      case SignalType.callAnswer:
+        return 'CALL_ANSWER';
+      case SignalType.iceCandidate:
+        return 'ICE_CANDIDATE';
+      case SignalType.callReject:
+        return 'CALL_REJECT';
+      case SignalType.callCancel:
+        return 'CALL_CANCEL';
+      case SignalType.callHangup:
+        return 'CALL_HANGUP';
+      case SignalType.callBusy:
+        return 'CALL_BUSY';
     }
   }
 }
 
 SignalType? _parseSignalType(String? raw) {
   switch (raw) {
-    case 'CALL_OFFER':     return SignalType.callOffer;
-    case 'CALL_ANSWER':    return SignalType.callAnswer;
-    case 'ICE_CANDIDATE':  return SignalType.iceCandidate;
-    case 'CALL_REJECT':    return SignalType.callReject;
-    case 'CALL_CANCEL':    return SignalType.callCancel;
-    case 'CALL_HANGUP':    return SignalType.callHangup;
-    case 'CALL_BUSY':      return SignalType.callBusy;
-    default:               return null;
+    case 'CALL_OFFER':
+      return SignalType.callOffer;
+    case 'CALL_ANSWER':
+      return SignalType.callAnswer;
+    case 'ICE_CANDIDATE':
+      return SignalType.iceCandidate;
+    case 'CALL_REJECT':
+      return SignalType.callReject;
+    case 'CALL_CANCEL':
+      return SignalType.callCancel;
+    case 'CALL_HANGUP':
+      return SignalType.callHangup;
+    case 'CALL_BUSY':
+      return SignalType.callBusy;
+    default:
+      return null;
   }
 }
 
 // ── STUN/TURN configuration ───────────────────────────────────────────────────
 const _iceServers = {
   'iceServers': [
-    // Google's public STUN server — suitable for most networks.
-    // Add a TURN server here if you need relay for symmetric NAT:
-    // { 'urls': 'turn:your.turn.server', 'username': '...', 'credential': '...' }
     {'urls': 'stun:stun.l.google.com:19302'},
     {'urls': 'stun:stun1.l.google.com:19302'},
   ]
@@ -66,18 +78,6 @@ const _offerSdpConstraints = {
   'optional': [],
 };
 
-/// Manages a single WebRTC peer connection and its STOMP signaling channel.
-///
-/// Usage
-/// -----
-///  1. Call [listenForIncoming] once when the app starts (or when the user
-///     logs in) to subscribe to the STOMP `/user/queue/signal` destination.
-///  2. When the user initiates a call: [startCall].
-///  3. When the user answers an incoming call: [answerCall].
-///  4. To end: [hangup].
-///
-/// The service fires the callbacks set on it so the UI layer can react without
-/// coupling to WebRTC internals.
 class CallSignalingService {
   final StompService _stomp;
   final String localUserId;
@@ -85,37 +85,66 @@ class CallSignalingService {
   CallSignalingService({required StompService stomp, required this.localUserId})
       : _stomp = stomp;
 
+  /// Expose STOMP instance properly
+  StompService get stomp => _stomp;
+
   // ── State ─────────────────────────────────────────────────────────────────
   RTCPeerConnection? _pc;
   MediaStream? _localStream;
+  MediaStream? _remoteStream;
   String? _remoteUserId;
   String? _conversationId;
-  String? _callSessionId; // server-assigned, used for accept/reject
-  bool _isOffer = false; // true = we are the caller
+  String? _callSessionId;
+  bool _isOffer = false;
+
+  MediaStream? get latestLocalStream => _localStream;
+  MediaStream? get latestRemoteStream => _remoteStream;
 
   final List<RTCIceCandidate> _pendingCandidates = [];
 
   // ── Public streams ────────────────────────────────────────────────────────
-  /// Fires when a remote track is added (video/audio stream ready to render).
-  final StreamController<MediaStream> onRemoteStream =
-      StreamController.broadcast();
+  final async.StreamController<MediaStream> onRemoteStream =
+  async.StreamController<MediaStream>.broadcast();
 
-  /// Fires when the local stream is ready (to show self-preview).
-  final StreamController<MediaStream> onLocalStream =
-      StreamController.broadcast();
+  final async.StreamController<MediaStream> onLocalStream =
+  async.StreamController<MediaStream>.broadcast();
 
-  /// Fires when an incoming call arrives with:
-  ///   { fromUserId, conversationId, callType, sdp }
-  final StreamController<Map<String, dynamic>> onIncomingCall =
-      StreamController.broadcast();
+  final async.StreamController<Map<String, dynamic>> onIncomingCall =
+  async.StreamController<Map<String, dynamic>>.broadcast();
 
-  /// Fires when the remote peer hangs up, rejects, or cancels.
-  final StreamController<SignalType> onCallEnded =
-      StreamController.broadcast();
+  final async.StreamController<SignalType> onCallEnded =
+  async.StreamController<SignalType>.broadcast();
+
+  // ── Safe stream emitters ──────────────────────────────────────────────────
+
+  void _emitRemoteStream(MediaStream stream) {
+    _remoteStream = stream;
+    if (!onRemoteStream.isClosed) {
+      onRemoteStream.add(stream);
+    }
+  }
+
+  void _emitLocalStream(MediaStream stream) {
+    _localStream = stream;
+    if (!onLocalStream.isClosed) {
+      onLocalStream.add(stream);
+    }
+  }
+
+  void _emitIncomingCall(Map<String, dynamic> msg) {
+    if (!onIncomingCall.isClosed) {
+      onIncomingCall.add(msg);
+    }
+  }
+
+  void _emitCallEnded(SignalType type) {
+    if (!onCallEnded.isClosed) {
+      onCallEnded.add(type);
+    }
+  }
 
   // ── STOMP subscription ────────────────────────────────────────────────────
 
-  /// Subscribe to the signal queue. Call this once after STOMP connects.
   void listenForIncoming() {
     _stomp.subscribeToSignaling(_onSignalFrame);
   }
@@ -131,13 +160,12 @@ class CallSignalingService {
 
     final type = _parseSignalType(msg['type']?.toString());
     if (type == null) {
-      // Recognize group call signals delivered to private queue
       if (msg['type']?.toString() == 'GROUP_CALL_STARTED') {
         final caller = msg['fromUserId'] ?? msg['callerUserId'];
         if (caller != null && caller != localUserId) {
           msg['isGroup'] = true;
           msg['fromUserId'] = caller;
-          onIncomingCall.add(msg);
+          _emitIncomingCall(msg);
         }
       }
       return;
@@ -148,7 +176,12 @@ class CallSignalingService {
       case SignalType.callOffer:
         final fromId = (msg['fromUserId'] ?? msg['callerUserId'])?.toString();
         if (fromId != null && fromId.isNotEmpty && fromId != localUserId) {
-          onIncomingCall.add(msg);
+          // Do NOT clear _pendingCandidates here. Trickle ICE routinely makes
+          // candidates arrive before the offer (observed 24 candidates then the
+          // offer); wiping them on offer receipt leaves the callee with no
+          // remote candidates and the call never connects. Stale candidates
+          // from a previous call are already dropped by _teardown().
+          _emitIncomingCall(msg);
         }
         break;
       case SignalType.callAnswer:
@@ -162,7 +195,7 @@ class CallSignalingService {
       case SignalType.callHangup:
       case SignalType.callBusy:
         _teardown();
-        onCallEnded.add(type);
+        _emitCallEnded(type);
         CallKitService.endAllCalls();
         break;
     }
@@ -176,21 +209,18 @@ class CallSignalingService {
 
   // ── Start a call (caller side) ────────────────────────────────────────────
 
-  /// Initiates an outgoing call to [remoteUserId].
-  ///
-  /// [video] = false → audio-only call.
   Future<void> startCall({
     required String remoteUserId,
     required String conversationId,
     bool video = false,
   }) async {
     await _teardown();
-    _remoteUserId    = remoteUserId;
-    _conversationId  = conversationId;
-    _isOffer         = true;
+    _remoteUserId = remoteUserId;
+    _conversationId = conversationId;
+    _isOffer = true;
 
-    _localStream = await _getUserMedia(video: video);
-    onLocalStream.add(_localStream!);
+    final stream = await _getUserMedia(video: video);
+    _emitLocalStream(stream);
 
     await _createPeerConnection();
     _localStream!.getTracks().forEach((t) => _pc!.addTrack(t, _localStream!));
@@ -199,60 +229,125 @@ class CallSignalingService {
     await _pc!.setLocalDescription(offer);
 
     _send(remoteUserId, {
-      'type':           SignalType.callOffer.wire,
-      'fromUserId':     localUserId,
+      'type': SignalType.callOffer.wire,
+      'fromUserId': localUserId,
       'conversationId': conversationId,
-      'callType':       video ? 'VIDEO' : 'AUDIO',
-      'sdp':            offer.toMap(),
+      'callType': video ? 'VIDEO' : 'AUDIO',
+      'sdp': offer.toMap(),
     });
   }
 
   // ── Answer an incoming call (callee side) ─────────────────────────────────
 
-  /// Call this after the user accepts an incoming offer.
-  ///
-  /// [offerMsg] is the map delivered via [onIncomingCall].
   Future<void> answerCall({
     required Map<String, dynamic> offerMsg,
     bool video = false,
   }) async {
+    final savedCandidates = List<RTCIceCandidate>.from(_pendingCandidates);
     await _teardown();
-    _callSessionId  = offerMsg['callSessionId']?.toString();
-    _remoteUserId   = offerMsg['fromUserId']?.toString();
-    _conversationId = offerMsg['conversationId']?.toString();
-    _isOffer        = false;
+    _pendingCandidates.addAll(savedCandidates);
 
-    _localStream = await _getUserMedia(video: video);
-    onLocalStream.add(_localStream!);
+    _callSessionId = offerMsg['callSessionId']?.toString();
+    _remoteUserId = offerMsg['fromUserId']?.toString();
+    _conversationId = offerMsg['conversationId']?.toString();
+    _isOffer = false;
+
+    final stream = await _getUserMedia(video: video);
+    _emitLocalStream(stream);
 
     await _createPeerConnection();
     _localStream!.getTracks().forEach((t) => _pc!.addTrack(t, _localStream!));
 
-    final sdpMap = offerMsg['sdp'] as Map<String, dynamic>?;
-    if (sdpMap != null) {
-      final offer = RTCSessionDescription(
-          sdpMap['sdp']?.toString(), sdpMap['type']?.toString());
-      await _pc!.setRemoteDescription(offer);
+    final rawSdp = offerMsg['sdp'];
+    Map<String, dynamic>? sdpMap;
+    if (rawSdp is Map<String, dynamic>) {
+      sdpMap = rawSdp;
+    } else if (rawSdp is Map) {
+      sdpMap = rawSdp.map((k, v) => MapEntry(k.toString(), v));
+    } else if (rawSdp is String && rawSdp.isNotEmpty) {
+      if (rawSdp.trim().startsWith('{')) {
+        sdpMap = jsonDecode(rawSdp) as Map<String, dynamic>;
+      } else {
+        sdpMap = {
+          'type': offerMsg['sdpType']?.toString() ?? 'offer',
+          'sdp': rawSdp,
+        };
+      }
     }
 
-    // Flush buffered ICE candidates that arrived before the remote description.
+    if (sdpMap != null && sdpMap['sdp'] != null) {
+      final offer = RTCSessionDescription(
+          sdpMap['sdp']?.toString(), sdpMap['type']?.toString() ?? 'offer');
+      await _pc!.setRemoteDescription(offer);
+    } else {
+      throw StateError('Missing SDP offer in incoming call payload');
+    }
+
     for (final c in _pendingCandidates) {
-      await _pc!.addCandidate(c);
+      try {
+        await _pc!.addCandidate(c);
+      } catch (e) {
+        debugPrint('[Signaling] Error flushing buffered candidate: $e');
+      }
     }
     _pendingCandidates.clear();
 
     final answer = await _pc!.createAnswer(_offerSdpConstraints);
     await _pc!.setLocalDescription(answer);
 
-    _send(_remoteUserId!, {
-      'type': SignalType.callAnswer.wire,
-      'fromUserId': localUserId,
-      'conversationId': _conversationId,
-      'sdp': answer.toMap(),
-    });
+    if (_remoteUserId != null && _remoteUserId!.isNotEmpty) {
+      _send(_remoteUserId!, {
+        'type': SignalType.callAnswer.wire,
+        'fromUserId': localUserId,
+        'conversationId': _conversationId,
+        'sdp': answer.toMap(),
+      });
+    }
+
+    if (_callSessionId != null && _callSessionId!.isNotEmpty) {
+      async.unawaited(CallKitService.postCallAction(
+        'accept',
+        _callSessionId!,
+        sdp: answer.toMap(),
+      ));
+    }
   }
 
-  /// Reject an incoming call (before answering).
+  /// បើកកាមេរ៉ាអំឡុងពេលកំពុង Voice Call (Upgrade Audio -> Video Call)
+  Future<void> enableVideo() async {
+    if (_pc == null || _localStream == null) return;
+    if (_localStream!.getVideoTracks().isNotEmpty) {
+      toggleCamera(false);
+      return;
+    }
+
+    final videoStream = await navigator.mediaDevices.getUserMedia({
+      'audio': false,
+      'video': {
+        'facingMode': 'user',
+        'width': {'ideal': 1280},
+        'height': {'ideal': 720},
+      },
+    });
+
+    final videoTrack = videoStream.getVideoTracks().first;
+    await _localStream!.addTrack(videoTrack);
+    await _pc!.addTrack(videoTrack, _localStream!);
+    _emitLocalStream(_localStream!);
+
+    if (_remoteUserId != null && _remoteUserId!.isNotEmpty) {
+      final offer = await _pc!.createOffer(_offerSdpConstraints);
+      await _pc!.setLocalDescription(offer);
+      _send(_remoteUserId!, {
+        'type': SignalType.callOffer.wire,
+        'fromUserId': localUserId,
+        'conversationId': _conversationId,
+        'callType': 'VIDEO',
+        'sdp': offer.toMap(),
+      });
+    }
+  }
+
   void rejectCall(Map<String, dynamic> offerMsg) {
     final from = offerMsg['fromUserId']?.toString();
     if (from == null) return;
@@ -265,13 +360,12 @@ class CallSignalingService {
 
   // ── Hang up ───────────────────────────────────────────────────────────────
 
-  /// End the call (either side).
   Future<void> hangup() async {
     if (_remoteUserId != null) {
       _send(_remoteUserId!, {
         'type': _isOffer
-            ? SignalType.callCancel.wire   // caller cancels before answer
-            : SignalType.callHangup.wire,  // either side ends active call
+            ? SignalType.callCancel.wire
+            : SignalType.callHangup.wire,
         'fromUserId': localUserId,
         'conversationId': _conversationId,
       });
@@ -296,7 +390,12 @@ class CallSignalingService {
 
     _pc!.onTrack = (event) {
       if (event.streams.isNotEmpty) {
-        onRemoteStream.add(event.streams.first);
+        _emitRemoteStream(event.streams.first);
+      } else if (event.track.kind == 'audio' || event.track.kind == 'video') {
+        createLocalMediaStream('remote_${event.track.id}').then((ms) {
+          ms.addTrack(event.track);
+          _emitRemoteStream(ms);
+        });
       }
     };
 
@@ -304,7 +403,7 @@ class CallSignalingService {
       debugPrint('[WebRTC] connection state: $state');
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
           state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
-        onCallEnded.add(SignalType.callHangup);
+        _emitCallEnded(SignalType.callHangup);
         _teardown();
       }
     };
@@ -332,12 +431,17 @@ class CallSignalingService {
     final candidate = RTCIceCandidate(
       c['candidate']?.toString() ?? '',
       c['sdpMid']?.toString(),
-      c['sdpMLineIndex'] is int ? c['sdpMLineIndex'] as int : 0,
+      c['sdpMLineIndex'] is int
+          ? c['sdpMLineIndex'] as int
+          : int.tryParse(c['sdpMLineIndex']?.toString() ?? '0') ?? 0,
     );
-    if (_pc?.signalingState != null) {
+
+    if (_pc != null && await _pc!.getRemoteDescription() != null) {
       try {
         await _pc!.addCandidate(candidate);
-      } catch (_) {
+        debugPrint('[Signaling] Successfully added ICE candidate');
+      } catch (e) {
+        debugPrint('[Signaling] Error adding candidate: $e');
         _pendingCandidates.add(candidate);
       }
     } else {
@@ -350,10 +454,10 @@ class CallSignalingService {
       'audio': true,
       'video': video
           ? {
-              'facingMode': 'user',
-              'width': {'ideal': 1280},
-              'height': {'ideal': 720},
-            }
+        'facingMode': 'user',
+        'width': {'ideal': 1280},
+        'height': {'ideal': 720},
+      }
           : false,
     };
     return await navigator.mediaDevices.getUserMedia(constraints);
@@ -364,6 +468,7 @@ class CallSignalingService {
     _localStream?.getTracks().forEach((t) => t.stop());
     _localStream?.dispose();
     _localStream = null;
+    _remoteStream = null;
     await _pc?.close();
     _pc = null;
     _remoteUserId = null;
@@ -380,7 +485,6 @@ class CallSignalingService {
     _localStream?.getVideoTracks().forEach((t) => t.enabled = !cameraOff);
   }
 
-  /// Switch between front and back camera (mobile only).
   Future<void> switchCamera() async {
     final tracks = _localStream?.getVideoTracks() ?? [];
     if (tracks.isEmpty) return;
@@ -389,9 +493,9 @@ class CallSignalingService {
 
   void dispose() {
     _teardown();
-    onRemoteStream.close();
-    onLocalStream.close();
-    onIncomingCall.close();
-    onCallEnded.close();
+    if (!onRemoteStream.isClosed) onRemoteStream.close();
+    if (!onLocalStream.isClosed) onLocalStream.close();
+    if (!onIncomingCall.isClosed) onIncomingCall.close();
+    if (!onCallEnded.isClosed) onCallEnded.close();
   }
 }

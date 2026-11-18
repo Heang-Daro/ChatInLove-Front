@@ -19,6 +19,12 @@ const _offerConstraints = {
   'optional': [],
 };
 
+const _videoConstraints = {
+  'facingMode': 'user',
+  'width': {'ideal': 640},
+  'height': {'ideal': 480},
+};
+
 /// One active participant in the group call.
 /// Only members who have explicitly joined are tracked here.
 class GroupParticipant {
@@ -28,6 +34,13 @@ class GroupParticipant {
   MediaStream? remoteStream;
   final RTCVideoRenderer renderer;
   bool connected;
+
+  /// True while the remote person is actually sending camera video
+  /// (updated by offer/join payloads and VIDEO_STATE messages).
+  bool videoOn = false;
+
+  /// Local tracks have already been added to [pc] (first negotiation done).
+  bool tracksAdded = false;
 
   GroupParticipant({required this.userId, required this.username})
       : renderer = RTCVideoRenderer(),
@@ -43,25 +56,12 @@ class GroupParticipant {
 }
 
 /// Mesh-topology group call signaling with explicit join flow.
-///
-/// Flow (caller side):
-///   1. `startCall()` — captures local media, broadcasts GROUP_CALL_STARTED to
-///      the conversation topic. Does NOT create any peer connections yet.
-///   2. When a member taps "Join", they send JOIN_CALL back to the caller.
-///   3. `_handleJoin()` — creates a peer connection and sends a CALL_OFFER to
-///      that specific member. Only then do they appear in the grid.
-///
-/// Flow (callee side — received via HomeScreen/ConversationProvider):
-///   1. App receives GROUP_CALL_STARTED via /user/queue/signal.
-///   2. UI shows an "incoming group call" banner / overlay.
-///   3. User taps "Join" → `joinExistingCall()` is called.
-///   4. This sends JOIN_CALL to the caller, who then sends back a CALL_OFFER.
-///   5. `_handleOffer()` — creates the peer connection and answers.
 class GroupCallSignalingService {
   final StompService stomp;
   final String localUserId;
   final String conversationId;
-  final bool video;
+
+  bool video;
   final List<String> memberUserIds;
 
   GroupCallSignalingService({
@@ -75,7 +75,7 @@ class GroupCallSignalingService {
   // ── State ──────────────────────────────────────────────────────────────────
   MediaStream? _localStream;
 
-  /// Only participants who have JOINED the call. Never the full group member list.
+  /// Only participants who have JOINED the call.
   final Map<String, GroupParticipant> _activeParticipants = {};
 
   final Map<String, List<RTCIceCandidate>> _pendingCandidates = {};
@@ -83,35 +83,31 @@ class GroupCallSignalingService {
   String? _callerId; // who started the call
 
   // ── Public streams ─────────────────────────────────────────────────────────
-  /// Fires whenever _activeParticipants changes — rebuild the grid.
   final StreamController<void> onParticipantsChanged =
-      StreamController.broadcast();
+  StreamController.broadcast();
 
-  /// Fires when the local stream is ready (self-preview).
   final StreamController<MediaStream> onLocalStream =
-      StreamController.broadcast();
+  StreamController.broadcast();
 
-  /// Fires when a member declines the incoming group call.
-  /// The payload is the display name of the member who declined.
   final StreamController<String> onParticipantDeclined =
-      StreamController.broadcast();
+  StreamController.broadcast();
 
-  /// Only active (joined) participants.
   List<GroupParticipant> get participants =>
       List.unmodifiable(_activeParticipants.values);
 
   MediaStream? get localStream => _localStream;
 
-  // ── Caller: start the call ─────────────────────────────────────────────────
+  bool get hasLocalVideo => _localStream?.getVideoTracks().isNotEmpty ?? false;
 
-  /// Captures local media and broadcasts GROUP_CALL_STARTED to the conversation.
-  /// Does NOT create peer connections — waits for members to send JOIN_CALL.
+  bool get _cameraOn =>
+      _localStream?.getVideoTracks().any((t) => t.enabled) ?? false;
+
+  // ── Caller: start the call ─────────────────────────────────────────────────
   Future<void> startCall() async {
     _callerId = localUserId;
     _localStream = await _getUserMedia();
     onLocalStream.add(_localStream!);
 
-    // Subscribe to both channels before broadcasting.
     stomp.subscribeToSignaling(_onPrivateFrame);
     stomp.subscribeToGroupCallTopic(conversationId, _onGroupFrame);
 
@@ -127,7 +123,6 @@ class GroupCallSignalingService {
 
     stomp.sendGroupSignal(conversationId, groupPayload);
 
-    // Also send directly to each group member queue for instant alert
     for (final mId in memberUserIds) {
       if (mId.isNotEmpty && mId != localUserId) {
         stomp.sendSignal(mId, groupPayload);
@@ -138,9 +133,6 @@ class GroupCallSignalingService {
   }
 
   // ── Callee: join an existing call ──────────────────────────────────────────
-
-  /// Called when the user taps "Join" on the incoming group call banner.
-  /// Captures local media and sends JOIN_CALL to the caller.
   Future<void> joinExistingCall({
     required String callerUserId,
     required String callerUsername,
@@ -156,16 +148,76 @@ class GroupCallSignalingService {
       'fromUserId': localUserId,
       'conversationId': conversationId,
       'callType': video ? 'VIDEO' : 'AUDIO',
+      'videoOn': _cameraOn,
       'isGroup': true,
       'joinerUsername': _usernameOf(localUserId),
     });
     debugPrint('[GroupCall] JOIN_CALL sent to caller $callerUserId');
   }
 
-  // ── Leave ──────────────────────────────────────────────────────────────────
+  // ── Mid-call: upgrade voice → video ────────────────────────────────────────
+  Future<void> enableVideo() async {
+    if (hasLocalVideo) {
+      toggleCamera(false);
+      return;
+    }
 
+    final cam = await navigator.mediaDevices.getUserMedia({
+      'audio': false,
+      'video': _videoConstraints,
+    });
+    final track = cam.getVideoTracks().first;
+
+    _localStream ??= await navigator.mediaDevices
+        .getUserMedia({'audio': true, 'video': false});
+    await _localStream!.addTrack(track);
+    video = true;
+
+    for (final p in _activeParticipants.values) {
+      final pc = p.pc;
+      if (pc == null) continue;
+      try {
+        await pc.addTrack(track, _localStream!);
+        await _renegotiate(p);
+      } catch (e) {
+        debugPrint('[GroupCall] renegotiate with ${p.userId} failed: $e');
+      }
+    }
+
+    _sendVideoState(true);
+    onLocalStream.add(_localStream!);
+  }
+
+  Future<void> _renegotiate(GroupParticipant p) async {
+    final pc = p.pc;
+    if (pc == null) return;
+    final offer = await pc.createOffer(_offerConstraints);
+    await pc.setLocalDescription(offer);
+    stomp.sendSignal(p.userId, {
+      'type': 'CALL_OFFER',
+      'fromUserId': localUserId,
+      'conversationId': conversationId,
+      'callType': video ? 'VIDEO' : 'AUDIO',
+      'videoOn': _cameraOn,
+      'sdp': offer.toMap(),
+      'isGroup': true,
+    });
+  }
+
+  void _sendVideoState(bool on) {
+    for (final p in _activeParticipants.values) {
+      stomp.sendSignal(p.userId, {
+        'type': 'VIDEO_STATE',
+        'fromUserId': localUserId,
+        'conversationId': conversationId,
+        'videoOn': on,
+        'isGroup': true,
+      });
+    }
+  }
+
+  // ── Leave ──────────────────────────────────────────────────────────────────
   Future<void> leave() async {
-    // Notify all active participants.
     for (final p in _activeParticipants.values) {
       stomp.sendSignal(p.userId, {
         'type': 'LEAVE_CALL',
@@ -174,7 +226,6 @@ class GroupCallSignalingService {
         'isGroup': true,
       });
     }
-    // Also broadcast on group topic so non-connected members see it.
     stomp.sendGroupSignal(conversationId, {
       'type': 'LEAVE_CALL',
       'fromUserId': localUserId,
@@ -186,8 +237,6 @@ class GroupCallSignalingService {
   }
 
   // ── Signal frame routing ───────────────────────────────────────────────────
-
-  /// Handles frames arriving on /user/queue/signal (targeted messages).
   void _onPrivateFrame(StompFrame frame) {
     if (frame.body == null) return;
     Map<String, dynamic> msg;
@@ -203,7 +252,6 @@ class GroupCallSignalingService {
 
     switch (type) {
       case 'JOIN_CALL':
-        // A member wants to join — we are the caller, create a peer and offer.
         if (localUserId == _callerId) {
           _handleJoin(from, msg);
         }
@@ -217,6 +265,9 @@ class GroupCallSignalingService {
       case 'ICE_CANDIDATE':
         if (msg['isGroup'] == true) _handleIce(from, msg);
         break;
+      case 'VIDEO_STATE':
+        _handleVideoState(from, msg);
+        break;
       case 'CALL_HANGUP':
       case 'LEAVE_CALL':
         _removeParticipant(from);
@@ -227,10 +278,7 @@ class GroupCallSignalingService {
     }
   }
 
-  /// Handles frames arriving on /topic/conversations/{id}/call (broadcasts).
   void _onGroupFrame(StompFrame frame) {
-    // Group topic frames are informational (GROUP_CALL_STARTED, LEAVE_CALL).
-    // Actual WebRTC signaling arrives via private queues.
     if (frame.body == null) return;
     Map<String, dynamic> msg;
     try {
@@ -241,7 +289,7 @@ class GroupCallSignalingService {
 
     final type = msg['type']?.toString();
     final from = msg['fromUserId']?.toString() ?? '';
-    if (from == localUserId) return; // ignore own broadcasts
+    if (from == localUserId) return;
 
     if (type == 'LEAVE_CALL') {
       _removeParticipant(from);
@@ -249,51 +297,63 @@ class GroupCallSignalingService {
   }
 
   // ── Peer connection lifecycle ──────────────────────────────────────────────
-
-  /// Caller received JOIN_CALL — create a peer connection and send offer.
   void _handleJoin(String from, Map<String, dynamic> msg) async {
     final username = msg['joinerUsername']?.toString() ?? from;
     debugPrint('[GroupCall] $from ($username) joined — creating offer');
 
     final p = await _getOrCreateParticipant(from, username);
-    _localStream!.getTracks().forEach((t) => p.pc!.addTrack(t, _localStream!));
+    if (msg['videoOn'] is bool) p.videoOn = msg['videoOn'] as bool;
 
-    final offer = await p.pc!.createOffer(_offerConstraints);
-    await p.pc!.setLocalDescription(offer);
+    if (!p.tracksAdded) {
+      for (final t in _localStream!.getTracks()) {
+        await p.pc!.addTrack(t, _localStream!);
+      }
+      p.tracksAdded = true;
+    }
 
-    stomp.sendSignal(from, {
-      'type': 'CALL_OFFER',
-      'fromUserId': localUserId,
-      'conversationId': conversationId,
-      'callType': video ? 'VIDEO' : 'AUDIO',
-      'sdp': offer.toMap(),
-      'isGroup': true,
-    });
+    await _renegotiate(p);
     onParticipantsChanged.add(null);
   }
 
-  /// Callee received CALL_OFFER from caller — answer it.
   void _handleOffer(String from, Map<String, dynamic> msg) async {
     debugPrint('[GroupCall] received CALL_OFFER from $from');
     final username = msg['senderUsername']?.toString() ?? from;
     final p = await _getOrCreateParticipant(from, username);
-    _localStream!.getTracks().forEach((t) => p.pc!.addTrack(t, _localStream!));
+    final pc = p.pc!;
+    if (msg['videoOn'] is bool) p.videoOn = msg['videoOn'] as bool;
+
+    if (pc.signalingState ==
+        RTCSignalingState.RTCSignalingStateHaveLocalOffer) {
+      final polite = localUserId != _callerId;
+      if (!polite) {
+        debugPrint('[GroupCall] offer collision with $from — ignoring');
+        return;
+      }
+      await pc.setLocalDescription(RTCSessionDescription('', 'rollback'));
+    }
+
+    if (!p.tracksAdded) {
+      for (final t in _localStream!.getTracks()) {
+        await pc.addTrack(t, _localStream!);
+      }
+      p.tracksAdded = true;
+    }
 
     final sdpMap = msg['sdp'] as Map<String, dynamic>?;
     if (sdpMap != null) {
-      await p.pc!.setRemoteDescription(RTCSessionDescription(
+      await pc.setRemoteDescription(RTCSessionDescription(
         sdpMap['sdp']?.toString(),
         sdpMap['type']?.toString(),
       ));
     }
 
     for (final c in _pendingCandidates[from] ?? []) {
-      await p.pc!.addCandidate(c);
+      await pc.addCandidate(c);
     }
-    _pendingCandidates.remove(from);
+    _pendingCandidates[from] = [];
 
-    final answer = await p.pc!.createAnswer(_offerConstraints);
-    await p.pc!.setLocalDescription(answer);
+    final answer = await pc.createAnswer(_offerConstraints);
+    await pc.setLocalDescription(answer);
 
     stomp.sendSignal(from, {
       'type': 'CALL_ANSWER',
@@ -307,18 +367,22 @@ class GroupCallSignalingService {
 
   void _handleAnswer(String from, Map<String, dynamic> msg) async {
     final p = _activeParticipants[from];
-    if (p?.pc == null) return;
+    if (p == null || p.pc == null) return; // Null-safety check added
     final sdpMap = msg['sdp'] as Map<String, dynamic>?;
     if (sdpMap == null) return;
 
-    await p!.pc!.setRemoteDescription(RTCSessionDescription(
-      sdpMap['sdp']?.toString(),
-      sdpMap['type']?.toString(),
-    ));
-    for (final c in _pendingCandidates[from] ?? []) {
-      await p.pc!.addCandidate(c);
+    try {
+      await p.pc!.setRemoteDescription(RTCSessionDescription(
+        sdpMap['sdp']?.toString(),
+        sdpMap['type']?.toString(),
+      ));
+      for (final c in _pendingCandidates[from] ?? []) {
+        await p.pc!.addCandidate(c);
+      }
+      _pendingCandidates[from] = [];
+    } catch (e) {
+      debugPrint('[GroupCall] _handleAnswer error with $from: $e');
     }
-    _pendingCandidates.remove(from);
   }
 
   void _handleIce(String from, Map<String, dynamic> msg) async {
@@ -341,6 +405,13 @@ class GroupCallSignalingService {
     }
   }
 
+  void _handleVideoState(String from, Map<String, dynamic> msg) {
+    final p = _activeParticipants[from];
+    if (p == null) return;
+    p.videoOn = msg['videoOn'] == true;
+    onParticipantsChanged.add(null);
+  }
+
   Future<GroupParticipant> _getOrCreateParticipant(
       String userId, String username) async {
     var p = _activeParticipants[userId];
@@ -359,6 +430,7 @@ class GroupCallSignalingService {
     p.pc = pc;
 
     pc.onIceCandidate = (c) {
+      if (c.candidate == null || c.candidate!.isEmpty) return; // Candidate check added
       stomp.sendSignal(p.userId, {
         'type': 'ICE_CANDIDATE',
         'fromUserId': localUserId,
@@ -370,8 +442,15 @@ class GroupCallSignalingService {
 
     pc.onTrack = (event) {
       if (event.streams.isNotEmpty) {
-        p.remoteStream = event.streams.first;
-        p.renderer.srcObject = event.streams.first;
+        final stream = event.streams.first;
+        p.remoteStream = stream;
+
+        if (event.track.kind == 'video' &&
+            p.renderer.srcObject?.id == stream.id) {
+          p.renderer.srcObject = null;
+        }
+        p.renderer.srcObject = stream;
+
         p.connected = true;
         onParticipantsChanged.add(null);
       }
@@ -394,7 +473,6 @@ class GroupCallSignalingService {
     debugPrint('[GroupCall] $userId left/disconnected');
   }
 
-  /// A member received the incoming-call overlay and tapped "Decline".
   void _handleDecline(String from, Map<String, dynamic> msg) {
     final name = msg['declinedUsername']?.toString() ?? from;
     _removeParticipant(from);
@@ -403,23 +481,26 @@ class GroupCallSignalingService {
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
-
   Future<MediaStream> _getUserMedia() async {
     return navigator.mediaDevices.getUserMedia({
       'audio': true,
-      'video': video
-          ? {'facingMode': 'user', 'width': {'ideal': 640}, 'height': {'ideal': 480}}
-          : false,
+      'video': video ? _videoConstraints : false,
     });
   }
 
-  String _usernameOf(String userId) => userId; // placeholder — caller stamps it
+  String _usernameOf(String userId) => userId;
 
   void toggleMute(bool muted) =>
       _localStream?.getAudioTracks().forEach((t) => t.enabled = !muted);
 
-  void toggleCamera(bool off) =>
-      _localStream?.getVideoTracks().forEach((t) => t.enabled = !off);
+  void toggleCamera(bool off) {
+    final tracks = _localStream?.getVideoTracks() ?? [];
+    if (tracks.isEmpty) return;
+    for (final t in tracks) {
+      t.enabled = !off;
+    }
+    _sendVideoState(!off);
+  }
 
   Future<void> switchCamera() async {
     final tracks = _localStream?.getVideoTracks() ?? [];
@@ -428,8 +509,6 @@ class GroupCallSignalingService {
   }
 
   Future<void> _teardown() async {
-    // Stop listening on the shared signal queue so a finished group call
-    // doesn't keep reacting to 1-on-1 call frames.
     stomp.unsubscribeFromSignaling(_onPrivateFrame);
     for (final p in _activeParticipants.values) {
       await p.dispose();
