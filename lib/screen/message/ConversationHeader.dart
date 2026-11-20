@@ -137,10 +137,37 @@ class ConversationHeader extends StatelessWidget implements PreferredSizeWidget 
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontSize: 16, color: Colors.white, fontWeight: FontWeight.bold),
                         ),
-                        Text(
-                          isGroup ? "Tap for group info & members" : "Tap for contact info",
-                          style: const TextStyle(fontSize: 11, color: Colors.white70),
-                        ),
+                        if (isGroup)
+                          const Text(
+                            "Tap for group info & members",
+                            style: TextStyle(fontSize: 11, color: Colors.white70),
+                          )
+                        else
+                          Builder(builder: (context) {
+                            final currentUserId = context.read<AuthProvider>().currentUserId ?? '';
+                            final other = currentConvo?.members
+                                .where((m) => m.userId != currentUserId && m.leftAt == null)
+                                .firstOrNull;
+                            if (other == null) {
+                              return const Text("Tap for contact info",
+                                  style: TextStyle(fontSize: 11, color: Colors.white70));
+                            }
+                            final presence = convoProvider.presenceService.get(other.userId);
+                            final label = convoProvider.presenceService.lastSeenLabel(other.userId);
+                            return Row(mainAxisSize: MainAxisSize.min, children: [
+                              Container(
+                                width: 7,
+                                height: 7,
+                                decoration: BoxDecoration(
+                                  color: presence?.online == true ? Colors.lightGreenAccent : Colors.white54,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 5),
+                              Text(label.isEmpty ? "Tap for contact info" : label,
+                                  style: const TextStyle(fontSize: 11, color: Colors.white70)),
+                            ]);
+                          }),
                       ],
                     ),
                   ),
