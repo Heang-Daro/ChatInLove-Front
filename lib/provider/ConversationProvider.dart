@@ -18,7 +18,6 @@ import '../service/AccountManager.dart';
 import '../service/CacheService.dart';
 import '../service/CallSignalingService.dart';
 import '../service/StompService.dart';
-import '../service/PresenceService.dart';
 import '../service/ResumableUploadManager.dart';
 import '../screen/message/GroupCallMessageCard.dart';
 import 'AuthProvider.dart';
@@ -26,8 +25,6 @@ import 'AuthProvider.dart';
 class ConversationProvider extends ChangeNotifier {
   final String baseUrl = "${REST_URL}/api/conversations";
   final StompService _stompService = StompService();
-  final PresenceService presenceService = PresenceService();
-  bool _presenceListenerRegistered = false;
   CallSignalingService? _callSignaling;
   StreamSubscription? _incomingCallSub; // guard: cancelled on reconnect
   bool _callInProgress = false;         // guard: prevent duplicate popups
@@ -285,17 +282,12 @@ class ConversationProvider extends ChangeNotifier {
 
   void initSocket(AuthProvider authProvider) {
     authProviderUserId = authProvider.currentUserId;
-    if (!_presenceListenerRegistered) {
-      presenceService.addListener(notifyListeners);
-      _presenceListenerRegistered = true;
-    }
     _stompService.connect(
       authProvider,
       onMessageReceived: (message) {
         handleIncomingPrivateMessage(authProvider, message);
       },
       onTypingReceived: (typingData) {},
-      onPresenceReceived: presenceService.updateFromMap,
     );
     // Cancel any previous subscription before creating a new one so
     // reconnections don't stack duplicate listeners (the call-loop bug).
@@ -334,18 +326,6 @@ class ConversationProvider extends ChangeNotifier {
     _callInProgress = false;
   }
 
-  /// Load the latest presence snapshot for other members in an opened chat.
-  Future<void> loadPresenceForConversation(AuthProvider authProvider, String conversationId) async {
-    final conversation = _conversations.where((c) => c.id == conversationId).firstOrNull;
-    if (conversation == null) return;
-    final currentUserId = authProvider.currentUserId ?? '';
-    final token = authProvider.accessToken;
-    if (token == null) return;
-    for (final member in conversation.members) {
-      if (member.userId.isEmpty || member.userId == currentUserId || member.leftAt != null) continue;
-      await presenceService.fetchPresence(member.userId, token);
-    }
-  }
   void subscribeToActiveConversation(String conversationId) {
     _stompService.subscribeToConversation(conversationId, (message) {
       if (_activeConversationId == conversationId) {
@@ -1493,8 +1473,6 @@ class ConversationProvider extends ChangeNotifier {
     _conversationCacheTimer?.cancel();
     _messageCacheTimer?.cancel();
     _incomingCallSub?.cancel();
-    presenceService.removeListener(notifyListeners);
-    presenceService.dispose();
     super.dispose();
   }
 
