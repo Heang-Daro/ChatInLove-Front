@@ -19,7 +19,6 @@ class StompService {
   bool _isConnected = false;
 
   Function(MessageResponse message)? _onPrivateMessageReceived;
-  Function(Map<String, dynamic>)? _onPresenceReceived;
 
   /// Extra listeners (e.g. the offline repository) that want to see every
   /// incoming message without replacing the primary callback.
@@ -61,10 +60,8 @@ class StompService {
       AuthProvider authProvider, {
         required Function(MessageResponse message) onMessageReceived,
         required Function(Map<String, dynamic> typingData) onTypingReceived,
-        Function(Map<String, dynamic>)? onPresenceReceived,
       }) {
     _onPrivateMessageReceived = onMessageReceived;
-    _onPresenceReceived = onPresenceReceived;
 
     if (_isConnected && _stompClient != null) return;
 
@@ -110,20 +107,6 @@ class StompService {
                 } catch (e) {
                   debugPrint('Error parsing private queue message: $e');
                 }
-              }
-            },
-          );
-
-          // Subscribe to global online/offline presence events.
-          _stompClient?.subscribe(
-            destination: '/topic/presence',
-            callback: (StompFrame presenceFrame) {
-              if (presenceFrame.body == null) return;
-              try {
-                final payload = json.decode(presenceFrame.body!);
-                if (payload is Map<String, dynamic>) _onPresenceReceived?.call(payload);
-              } catch (e) {
-                debugPrint('Error parsing presence event: $e');
               }
             },
           );
@@ -231,13 +214,14 @@ class StompService {
     }
   }
 
+  /// The documented backend contract accepts an empty STOMP body.
+  /// It emits a typing=true event; the UI expires the indicator after inactivity.
   void sendTypingEvent(String conversationId, {bool isTyping = true}) {
-    if (_isConnected && _stompClient != null) {
-      _stompClient!.send(
-        destination: '/app/chat.typing/$conversationId',
-        body: json.encode({'isTyping': isTyping}),
-      );
-    }
+    if (!isTyping || !_isConnected || _stompClient == null) return;
+    _stompClient!.send(
+      destination: '/app/chat.typing/$conversationId',
+      body: '',
+    );
   }
 
   // NEW: Added method to send messages easily from Flutter UI
