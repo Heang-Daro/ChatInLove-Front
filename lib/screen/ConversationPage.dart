@@ -62,7 +62,9 @@ class _ConversationPageState extends State<ConversationPage> {
     _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final auth = context.read<AuthProvider>();
-      context.read<ConversationProvider>().fetchMessages(auth, widget.conversationId);
+      final provider = context.read<ConversationProvider>();
+      provider.fetchMessages(auth, widget.conversationId);
+      provider.loadPresenceForConversation(auth, widget.conversationId);
     });
   }
 
@@ -101,6 +103,9 @@ class _ConversationPageState extends State<ConversationPage> {
 
   @override
   void dispose() {
+    try {
+      context.read<ConversationProvider>().sendTyping(widget.conversationId, isTyping: false);
+    } catch (_) {}
     _messageController.removeListener(_onTextChanged);
     _messageController.dispose();
     _scrollController.dispose();
