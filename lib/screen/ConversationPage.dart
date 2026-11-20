@@ -64,7 +64,6 @@ class _ConversationPageState extends State<ConversationPage> {
       final auth = context.read<AuthProvider>();
       final provider = context.read<ConversationProvider>();
       provider.fetchMessages(auth, widget.conversationId);
-      provider.loadPresenceForConversation(auth, widget.conversationId);
     });
   }
 
@@ -90,7 +89,6 @@ class _ConversationPageState extends State<ConversationPage> {
   void _onTextChanged() {
     final conversations = context.read<ConversationProvider>();
     if (_messageController.text.isEmpty) {
-      conversations.sendTyping(widget.conversationId, isTyping: false);
       return;
     }
     final now = DateTime.now();
@@ -103,9 +101,6 @@ class _ConversationPageState extends State<ConversationPage> {
 
   @override
   void dispose() {
-    try {
-      context.read<ConversationProvider>().sendTyping(widget.conversationId, isTyping: false);
-    } catch (_) {}
     _messageController.removeListener(_onTextChanged);
     _messageController.dispose();
     _scrollController.dispose();
@@ -175,7 +170,6 @@ class _ConversationPageState extends State<ConversationPage> {
       final converted = MessageShortcuts.apply(raw);
       _messageController.clear();
       _scrollToBottom();
-      context.read<ConversationProvider>().sendTyping(widget.conversationId, isTyping: false);
       await context.read<ConversationProvider>().sendMessage(
         context.read<AuthProvider>(),
         widget.conversationId,
