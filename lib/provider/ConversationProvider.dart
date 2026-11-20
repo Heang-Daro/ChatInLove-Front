@@ -27,6 +27,7 @@ class ConversationProvider extends ChangeNotifier {
   final String baseUrl = "${REST_URL}/api/conversations";
   final StompService _stompService = StompService();
   final PresenceService presenceService = PresenceService();
+  bool _presenceListenerRegistered = false;
   CallSignalingService? _callSignaling;
   StreamSubscription? _incomingCallSub; // guard: cancelled on reconnect
   bool _callInProgress = false;         // guard: prevent duplicate popups
@@ -284,6 +285,10 @@ class ConversationProvider extends ChangeNotifier {
 
   void initSocket(AuthProvider authProvider) {
     authProviderUserId = authProvider.currentUserId;
+    if (!_presenceListenerRegistered) {
+      presenceService.addListener(notifyListeners);
+      _presenceListenerRegistered = true;
+    }
     _stompService.connect(
       authProvider,
       onMessageReceived: (message) {
@@ -1481,4 +1486,16 @@ class ConversationProvider extends ChangeNotifier {
       return false;
     }
   }
+
+  @override
+  void dispose() {
+    _typingTimer?.cancel();
+    _conversationCacheTimer?.cancel();
+    _messageCacheTimer?.cancel();
+    _incomingCallSub?.cancel();
+    presenceService.removeListener(notifyListeners);
+    presenceService.dispose();
+    super.dispose();
+  }
+
 }
