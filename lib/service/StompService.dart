@@ -19,6 +19,7 @@ class StompService {
   bool _isConnected = false;
 
   Function(MessageResponse message)? _onPrivateMessageReceived;
+  Function(Map<String, dynamic>)? _onPresenceReceived;
 
   /// Extra listeners (e.g. the offline repository) that want to see every
   /// incoming message without replacing the primary callback.
@@ -60,8 +61,10 @@ class StompService {
       AuthProvider authProvider, {
         required Function(MessageResponse message) onMessageReceived,
         required Function(Map<String, dynamic> typingData) onTypingReceived,
+        Function(Map<String, dynamic>)? onPresenceReceived,
       }) {
     _onPrivateMessageReceived = onMessageReceived;
+    _onPresenceReceived = onPresenceReceived;
 
     if (_isConnected && _stompClient != null) return;
 
@@ -107,6 +110,20 @@ class StompService {
                 } catch (e) {
                   debugPrint('Error parsing private queue message: $e');
                 }
+              }
+            },
+          );
+
+          // Subscribe to global online/offline presence events.
+          _stompClient?.subscribe(
+            destination: '/topic/presence',
+            callback: (StompFrame presenceFrame) {
+              if (presenceFrame.body == null) return;
+              try {
+                final payload = json.decode(presenceFrame.body!);
+                if (payload is Map<String, dynamic>) _onPresenceReceived?.call(payload);
+              } catch (e) {
+                debugPrint('Error parsing presence event: $e');
               }
             },
           );
