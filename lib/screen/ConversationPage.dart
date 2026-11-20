@@ -62,7 +62,8 @@ class _ConversationPageState extends State<ConversationPage> {
     _scrollController.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final auth = context.read<AuthProvider>();
-      context.read<ConversationProvider>().fetchMessages(auth, widget.conversationId);
+      final provider = context.read<ConversationProvider>();
+      provider.fetchMessages(auth, widget.conversationId);
     });
   }
 
@@ -88,7 +89,6 @@ class _ConversationPageState extends State<ConversationPage> {
   void _onTextChanged() {
     final conversations = context.read<ConversationProvider>();
     if (_messageController.text.isEmpty) {
-      conversations.sendTyping(widget.conversationId, isTyping: false);
       return;
     }
     final now = DateTime.now();
@@ -170,7 +170,6 @@ class _ConversationPageState extends State<ConversationPage> {
       final converted = MessageShortcuts.apply(raw);
       _messageController.clear();
       _scrollToBottom();
-      context.read<ConversationProvider>().sendTyping(widget.conversationId, isTyping: false);
       await context.read<ConversationProvider>().sendMessage(
         context.read<AuthProvider>(),
         widget.conversationId,

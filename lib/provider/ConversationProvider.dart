@@ -1466,4 +1466,14 @@ class ConversationProvider extends ChangeNotifier {
       return false;
     }
   }
+
+  @override
+  void dispose() {
+    _typingTimer?.cancel();
+    _conversationCacheTimer?.cancel();
+    _messageCacheTimer?.cancel();
+    _incomingCallSub?.cancel();
+    super.dispose();
+  }
+
 }

@@ -214,13 +214,14 @@ class StompService {
     }
   }
 
+  /// The documented backend contract accepts an empty STOMP body.
+  /// It emits a typing=true event; the UI expires the indicator after inactivity.
   void sendTypingEvent(String conversationId, {bool isTyping = true}) {
-    if (_isConnected && _stompClient != null) {
-      _stompClient!.send(
-        destination: '/app/chat.typing/$conversationId',
-        body: json.encode({'isTyping': isTyping}),
-      );
-    }
+    if (!isTyping || !_isConnected || _stompClient == null) return;
+    _stompClient!.send(
+      destination: '/app/chat.typing/$conversationId',
+      body: '',
+    );
   }
 
   // NEW: Added method to send messages easily from Flutter UI
